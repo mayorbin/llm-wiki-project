@@ -360,7 +360,8 @@ def sanitize_filename(filename: str) -> str:
 #### 摄入
 - `POST /api/ingestion/trigger` — 触发摄入（单文件或批量）
 - `POST /api/ingestion/retry/{task_id}` — 重试失败的摄入（复用已上传文件）
-- `GET /api/ingestion/status/{task_id}` — 摄入进度（5 步分阶段，失败时含 error 详情和建议）
+- `GET /api/ingestion/status/{task_id}` — 单个摄入进度（5 步分阶段，失败时含 error 详情和建议）
+- `POST /api/ingestion/statuses` — 批量查询摄入进度 `{ "task_ids": ["t1","t2"] }`
 - `GET /api/ingestion/history` — 历史记录（含快照状态）
 - `POST /api/ingestion/rollback/{task_id}` — 回滚摄入（从快照恢复）
 
@@ -2251,7 +2252,7 @@ export const filesApi = {
    → 后台触发摄入任务
    → 返回 task_id
 
-2. 前端轮询摄入进度
+2. 前端轮询摄入进度（自适应轮询，见下方设计）
    GET /api/ingestion/status/{task_id}
    → { step: 3, total: 5, steps: [...], elapsed: 13.1s }
 
@@ -2261,6 +2262,135 @@ export const filesApi = {
 4. 用户查询知识库
    POST /api/knowledge/query { question }
    → LLM 综合回答 + [[wikilink]] 引用 + 来源页面列表
+```
+
+---
+
+## 实时状态更新：自适应轮询
+
+不引入 WebSocket。v1 使用 HTTP 自适应轮询，理由：
+
+- 摄入任务 10–120 秒完成，秒级延迟完全可接受
+- 轮询无状态，前端断开重连无恢复逻辑
+- FastAPI + Nginx 零额外配置
+- WebSocket 连接管理、鉴权、断线重连的复杂度 ≥ 收益
+
+v2 可选升级为 **Server-Sent Events (SSE)**：比 WebSocket 轻量（HTTP 单向推送），FastAPI 原生支持，Nginx 兼容好。
+
+### 自适应轮询策略
+
+```typescript
+// src/composables/useTaskPolling.ts
+
+function getPollingInterval(step: number, status: string): number {
+  // 任务排队中：慢轮询
+  if (status === 'queued') return 5000
+
+  // 摄入进行中，按步骤阶段调整
+  switch (step) {
+    case 1: return 3000  // 文件转换（快，3s 足够）
+    case 2: return 2000  // LLM API 调用（最耗时但最需要感知进度）
+    case 3: return 3000  // 写入页面（快）
+    case 4: return 3000  // 更新索引（快）
+    case 5: return 5000  // 重建图谱（慢）
+    default: return 3000
+  }
+}
+```
+
+| 任务状态 | 轮询间隔 | 理由 |
+|---------|---------|------|
+| `queued`（排队中） | 5s | 排队时间不确定，低频轮询减少无效请求 |
+| `running` step 1–4 | 2–3s | 摄入进行中，需要感知进度 |
+| `running` step 5（图谱） | 5s | 图谱构建较慢，降低轮询频率 |
+| `completed` / `failed` | 停止轮询 | 终态 |
+
+### 退避策略
+
+网络错误或 429 时自动退避：
+
+```
+正常: 3s → 3s → 3s
+出错: 3s → 6s → 12s → 24s → 30s(max) → 恢复后重置为 3s
+```
+
+### 前端实现
+
+```typescript
+// src/composables/useTaskPolling.ts
+import { ref, onUnmounted } from 'vue'
+import { ingestionApi } from '@/api/ingestion'
+
+export function useTaskPolling(taskId: string) {
+  const task = ref<TaskStatus | null>(null)
+  const error = ref<string | null>(null)
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let retryCount = 0
+
+  function start() {
+    poll()
+  }
+
+  async function poll() {
+    try {
+      const result = await ingestionApi.getStatus(taskId)
+      task.value = result
+      error.value = null
+      retryCount = 0  // 成功后重置退避计数
+
+      if (result.status === 'completed' || result.status === 'failed') {
+        return  // 终态，停止轮询
+      }
+
+      const interval = getPollingInterval(result.step, result.status)
+      timer = setTimeout(poll, interval)
+    } catch (e) {
+      error.value = e.message
+      retryCount++
+      const backoff = Math.min(3000 * Math.pow(2, retryCount), 30000)
+      timer = setTimeout(poll, backoff)
+    }
+  }
+
+  function stop() {
+    if (timer) { clearTimeout(timer); timer = null }
+  }
+
+  onUnmounted(stop)
+
+  return { task, error, start, stop }
+}
+```
+
+### 多任务轮询合并
+
+同一页面上可能有多个活跃任务（不同文件的摄入并行）。前端合并为一个批量轮询请求：
+
+```
+POST /api/ingestion/statuses
+body: { "task_ids": ["t1", "t2", "t3"] }
+
+→ {
+  "tasks": {
+    "t1": { "status": "running", "step": 2, ... },
+    "t2": { "status": "completed", ... },
+    "t3": { "status": "queued", ... }
+  }
+}
+```
+
+文件管理页的文件列表中，每个文件如果是「摄入中」状态，通过批量轮询更新状态图标。
+
+### 全局摄入状态指示器更新
+
+侧边栏的状态圆点也通过轮询更新（低频 30s 一次，查最近一个任务的终态）：
+
+```typescript
+// 每 30s 查询一次全局状态，更新侧边栏圆点颜色
+setInterval(async () => {
+  const history = await ingestionApi.getHistory({ limit: 1 })
+  latestStatus.value = history.data[0]?.status ?? 'none'
+}, 30000)
 ```
 
 ---
