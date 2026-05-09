@@ -1328,9 +1328,12 @@ class LockManager:
         self.lock_dir = data_dir / ".locks"
         self.lock_dir.mkdir(exist_ok=True)
 
-    def _lock_path(self, scope: str, identifier: str) -> Path:
-        # 锁文件路径：data/.locks/{scope}/{identifier}.lock
-        return self.lock_dir / scope / f"{identifier}.lock"
+    def _lock_path(self, scope: str, project_id: str, identifier: str = "") -> Path:
+        # page/dir 锁: data/.locks/{scope}/{project_id}/{identifier}.lock
+        # project/index 锁: data/.locks/{scope}/{project_id}.lock
+        if scope in ("project", "index"):
+            return self.lock_dir / scope / f"{project_id}.lock"
+        return self.lock_dir / scope / project_id / f"{identifier}.lock"
 
     def acquire(self, scope: str, identifier: str,
                 timeout: float = 30, mode: str = "exclusive") -> FileLock:
@@ -1482,18 +1485,46 @@ def cleanup_stale_locks(lock_dir: Path, max_age_seconds: float = 3600):
 
 ```
 data/.locks/
-├── project/                  # 项目级写锁
+├── project/                  # 项目级写锁（标识符 = project_id）
 │   ├── proj-abc.lock
-│   └── proj-abc.info         # 持有者信息
-├── page/                     # Wiki 页面读写锁
-│   ├── sources_attention-paper.lock
-│   └── sources_attention-paper.info
-├── dir/                      # 目录操作锁
-│   ├── 论文_2025.lock
-│   └── 论文_2025.info
-└── index/                    # 索引文件锁
+│   └── proj-abc.info
+│
+├── page/                     # Wiki 页面读写锁（标识符 = project_id/page_path）
+│   ├── proj-abc/
+│   │   ├── sources_attention-paper.lock
+│   │   ├── sources_attention-paper.info
+│   │   ├── entities_Self-Attention.lock
+│   │   └── entities_Self-Attention.info
+│   └── proj-xyz/
+│       ├── concepts_Transformer.lock
+│       └── concepts_Transformer.info
+│
+├── dir/                      # 目录操作锁（标识符 = project_id/subdir_path）
+│   ├── proj-abc/
+│   │   ├── 论文_2025.lock
+│   │   └── 论文_2025.info
+│   └── proj-xyz/
+│       └── ...
+│
+└── index/                    # 索引文件锁（标识符 = project_id）
     ├── proj-abc.lock
-    └── proj-abc.info
+    ├── proj-abc.info
+    ├── proj-xyz.lock
+    └── proj-xyz.info
+```
+
+关键约束：**所有非项目级的锁标识符必须包含 `project_id` 前缀**，避免不同项目间的同名路径冲突。
+
+```python
+class LockManager:
+    def _lock_path(self, scope: str, project_id: str, identifier: str = "") -> Path:
+        """project_id 作为命名空间，防止跨项目冲突。"""
+        if scope in ("project", "index"):
+            # 仅 project_id 即可唯一标识
+            return self.lock_dir / scope / f"{project_id}.lock"
+        else:
+            # page / dir 需要 project_id + 路径
+            return self.lock_dir / scope / project_id / f"{identifier}.lock"
 ```
 
 ### 摄入任务队列（持久化）
