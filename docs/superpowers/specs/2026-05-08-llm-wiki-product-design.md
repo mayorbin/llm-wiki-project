@@ -238,12 +238,59 @@ frontend/
 ### API 层端点
 
 #### 认证
-- `POST /api/auth/login` — 登录，返回 JWT
+- `POST /api/auth/login` — 登录，返回 access_token + refresh_token
+- `POST /api/auth/refresh` — 刷新 access_token（使用 refresh_token）
+- `GET /api/auth/me` — 当前用户信息（用户名、角色、所属项目列表、权限）
 - `POST /api/auth/register` — 注册（v1 可配置关闭，管理员手动创建账号）
 - `GET /api/projects/{id}/members` — 项目成员列表
 - `POST /api/projects/{id}/members` — 添加成员（Owner 操作）
 - `DELETE /api/projects/{id}/members/{user_id}` — 移除成员
 - `POST /api/projects/{id}/transfer` — 转让项目所有权（Owner 操作）
+
+##### Token 设计
+
+```json
+// POST /api/auth/login 响应
+{
+  "access_token": "eyJhbGciOi...",     // JWT，有效期 1 小时
+  "refresh_token": "eyJhbGciOi...",    // JWT，有效期 7 天
+  "token_type": "bearer",
+  "expires_in": 3600
+}
+```
+
+- `access_token`：短期 JWT，负载 `{ sub: user_id, username, role, iat, exp }`
+- `refresh_token`：长期 JWT，负载 `{ sub: user_id, type: "refresh", iat, exp }`，仅用于刷新
+- refresh 端点接受 `refresh_token` → 返回新的 `access_token` + `refresh_token`（滚动刷新）
+- 刷新时校验 refresh_token 未过期且未列入黑名单（logout 时加入）
+
+##### GET /api/auth/me 响应
+
+```json
+{
+  "user_id": "u_abc",
+  "username": "zhangsan",
+  "display_name": "张三",
+  "role": "editor",                    // admin | user
+  "projects": [
+    {
+      "project_id": "proj_1",
+      "name": "AI 研究知识库",
+      "role": "owner",                 // owner | editor | viewer
+      "status": "active"
+    },
+    {
+      "project_id": "proj_2",
+      "name": "竞品分析",
+      "role": "editor",
+      "status": "active"
+    }
+  ],
+  "is_admin": false
+}
+```
+
+前端在应用初始化时调用 `GET /api/auth/me` 获取用户上下文，写入 Pinia auth store，作为全局导航、权限判断、项目切换的数据源。
 
 #### 项目管理
 - `GET /api/projects` — 用户所属项目列表
