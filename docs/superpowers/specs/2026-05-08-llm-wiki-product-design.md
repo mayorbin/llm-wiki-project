@@ -33,7 +33,89 @@ data/
 └── users.db                 # 用户 + 项目成员关系（SQLite）
 ```
 
-项目成员角色：**Owner**（创建者，可删除项目/管理成员）、**Editor**（上传/摄入/查询/管理文件）、**Viewer**（只读查询和浏览）。
+项目成员角色：**Owner**（创建者，可删除项目/管理成员/转让所有权）、**Editor**（上传/摄入/管理文件/编辑 wiki 页面）、**Viewer**（只读查询和浏览）。
+
+### 权限矩阵
+
+| 操作 | Owner | Editor | Viewer |
+|------|-------|--------|--------|
+| **查询知识库** `POST /api/knowledge/query` | ✅ | ✅ | ✅ |
+| **浏览 Wiki 页面** `GET /api/knowledge/pages` | ✅ | ✅ | ✅ |
+| **查看图谱** `GET /api/graph/data` | ✅ | ✅ | ✅ |
+| **查看文件/目录** `GET /api/files` / `dirs` | ✅ | ✅ | ✅ |
+| **下载源文件** | ✅ | ✅ | ✅ |
+| **上传文件** `POST /api/files/upload` | ✅ | ✅ | ❌ |
+| **创建目录** `POST /api/files/dirs` | ✅ | ✅ | ❌ |
+| **删除文件** `DELETE /api/files/{id}` | ✅ | ✅ | ❌ |
+| **移动文件** `POST /api/files/move` | ✅ | ✅ | ❌ |
+| **触发摄入** `POST /api/ingestion/trigger` | ✅ | ✅ | ❌ |
+| **重试/回滚摄入** `POST /api/ingestion/retry|rollback` | ✅ | ✅ | ❌ |
+| **编辑 Wiki 页面** `PUT /api/knowledge/pages/{path}` | ✅ | ✅ | ❌ |
+| **检测变更** `POST /api/files/detect-changes` | ✅ | ✅ | ❌ |
+| **触发 Re-Ingest** `POST /api/files/refresh*` | ✅ | ✅ | ❌ |
+| **构建图谱** `POST /api/graph/build` | ✅ | ✅ | ❌ |
+| **运行 Lint** `POST /api/lint` | ✅ | ✅ | ❌ |
+| **运行 Health** `GET /api/health` | ✅ | ✅ | ✅ |
+| **查看审计日志** `GET /api/audit-log` | ✅ | ✅ | ❌ |
+| **修改项目设置** `PATCH /api/projects/{id}/settings` | ✅ | ❌ | ❌ |
+| **修改项目信息** `PATCH /api/projects/{id}` | ✅ | ❌ | ❌ |
+| **管理成员** `GET|POST|DELETE /api/projects/{id}/members*` | ✅ | ❌ | ❌ |
+| **转让所有权** `POST /api/projects/{id}/transfer` | ✅ | ❌ | ❌ |
+| **删除项目** `DELETE /api/projects/{id}` | ✅ | ❌ | ❌ |
+| **导出备份** `POST /api/backup/export` | ✅ | ✅ | ❌ |
+| **导入备份** `POST /api/backup/import` | ✅ | ❌ | ❌ |
+
+### Owner 转让
+
+Owner 离开项目前需转让所有权：
+
+```
+POST /api/projects/{id}/transfer
+body: { "new_owner_id": "u_xyz" }
+
+前置条件：
+- 调用者必须是当前 Owner
+- new_owner_id 必须是项目已有成员（Editor 或 Viewer）
+- 转让后原 Owner 自动降级为 Editor
+```
+
+转让日志：`audit_log: action="owner_transfer", detail={"from":"u_abc","to":"u_xyz"}`
+
+如果 Owner 是最后一个成员且直接注销账号：
+- 项目自动归档（`status: archived`），保留数据
+- 管理员（全局 admin 角色）可以接管项目或删除
+
+### 用户注销
+
+用户注销不物理删除数据，采用软删除：
+
+```sql
+-- users 表
+ALTER TABLE users ADD COLUMN deleted_at TEXT;  -- NULL = 活跃，有值 = 已注销
+```
+
+注销行为：
+- 用户从所有项目的成员列表中移除
+- 审计日志中的 `user_id` 和 `username` **保留不变**（溯源需要）
+- 注销用户创建的任务（摄入记录）保留，标记 `created_by` 不变
+- 注销用户编辑的 wiki 页面保留，编辑历史中的用户信息保留
+- 注销用户的所有权项目：如果有其他成员 → 自动转让给加入最早的 Editor；如果无其他成员 → 项目归档
+- `GET /api/admin/users` 管理员可查看已注销用户列表（标记 `deleted`）
+- 注销用户不可重新登录，`is_active=0` + `deleted_at` 不为空
+
+### 全局 Admin 角色
+
+用户表中 `role = "admin"` 的全局管理员跨项目拥有权限：
+
+| 操作 | 全局 Admin |
+|------|-----------|
+| 查看任意项目列表 | ✅ |
+| 进入任意项目（只读） | ✅ |
+| 接管无主项目 | ✅ |
+| 创建/禁用/注销用户 | ✅ |
+| 查看全平台审计日志 | ✅ |
+| 修改全局配置 | ✅ |
+| 删除任意项目 | ✅（需二次确认） |
 
 ---
 
@@ -161,6 +243,7 @@ frontend/
 - `GET /api/projects/{id}/members` — 项目成员列表
 - `POST /api/projects/{id}/members` — 添加成员（Owner 操作）
 - `DELETE /api/projects/{id}/members/{user_id}` — 移除成员
+- `POST /api/projects/{id}/transfer` — 转让项目所有权（Owner 操作）
 
 #### 项目管理
 - `GET /api/projects` — 用户所属项目列表
@@ -377,12 +460,22 @@ def sanitize_filename(filename: str) -> str:
 - `POST /api/graph/build` — 触发构建
 - `GET /api/graph/stats` — 统计信息
 
-#### 维护
+#### 全局管理（仅 Admin）
+
+- `GET /api/admin/users` — 用户列表（含已注销）
+- `POST /api/admin/users` — 创建用户
+- `PATCH /api/admin/users/{id}` — 修改用户（禁用/启用/重置角色）
+- `DELETE /api/admin/users/{id}` — 注销用户（软删除）
+- `GET /api/admin/projects` — 全平台项目列表
+- `POST /api/admin/projects/{id}/takeover` — 接管无主项目
+- `GET /api/admin/audit-log` — 全平台审计日志
+
+#### 维护（Owner + Editor）
 - `POST /api/backup/export` — 导出 tar.gz
-- `POST /api/backup/import` — 恢复备份
+- `POST /api/backup/import` — 恢复备份（Owner only）
 - `GET /api/health` — 结构健康检查
 - `POST /api/lint` — 语义质量检查
-- `GET /api/audit-log` — 审计日志查询（支持筛选/分页/导出 CSV）
+- `GET /api/audit-log` — 项目审计日志查询（支持筛选/分页/导出 CSV）
 
 ### 统一分页规范
 
