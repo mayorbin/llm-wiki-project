@@ -2106,6 +2106,343 @@ export const filesApi = {
 
 ---
 
+## 配置管理
+
+### 配置来源与优先级
+
+配置按以下优先级加载（高→低）：
+
+1. **环境变量** `LLM_WIKI_*` — 最高优先级，Docker / systemd 部署首选
+2. **`.env` 文件** — 项目根目录，开发环境
+3. **`config.yaml`** — 配置文件，生产部署
+4. **代码内默认值** — 最低优先级
+
+```python
+# app/config.py
+from pydantic_settings import BaseSettings
+
+class Settings(BaseSettings):
+    # ── 应用 ──
+    app_name: str = "LLM Wiki"
+    app_version: str = "0.1.0"
+    debug: bool = False
+    log_level: str = "INFO"         # DEBUG | INFO | WARNING | ERROR
+
+    # ── 数据目录 ──
+    data_dir: str = "./data"        # 所有数据存储根目录
+
+    # ── LLM ──
+    llm_provider: str = "deepseek"
+    llm_model: str = "deepseek-v4-flash"
+    llm_api_base: str = "http://localhost:8000/v1"
+    llm_api_key: str = ""           # 必填，无默认值
+    llm_temperature: float = 0.3
+    llm_max_tokens: int = 8192
+    llm_timeout: int = 120          # 秒
+    llm_max_retries: int = 3
+    llm_fast_model: str = "deepseek-v4-flash"  # 轻量任务（lint 查询等）使用
+
+    # ── 服务 ──
+    host: str = "127.0.0.1"
+    port: int = 8000
+    workers: int = 2                # Gunicorn workers
+    secret_key: str = ""            # JWT 签名密钥，必填，启动时校验
+
+    # ── 安全 ──
+    max_upload_size_mb: int = 100
+    cors_origins: list[str] = ["*"]
+    registration_open: bool = False  # 是否开放注册
+
+    # ── 保留策略 ──
+    snapshot_retention_days: int = 30
+    task_history_days: int = 7
+    log_retention_days: int = 90
+
+    model_config = {
+        "env_prefix": "LLM_WIKI_",
+        "env_file": ".env",
+        "yaml_file": "config.yaml",
+    }
+```
+
+### config.yaml 示例
+
+```yaml
+# config.yaml — 生产部署配置文件
+app_name: "AI 研究知识库"
+debug: false
+log_level: "INFO"
+
+data_dir: "/data/llm-wiki"
+
+llm:
+  provider: "deepseek"
+  model: "deepseek-v4-flash"
+  api_base: "http://10.0.1.5:8000/v1"
+  api_key: "${LLM_WIKI_LLM_API_KEY}"  # 引用环境变量
+  temperature: 0.3
+  max_tokens: 8192
+
+service:
+  host: "0.0.0.0"
+  port: 8000
+  workers: 4
+  secret_key: "${LLM_WIKI_SECRET_KEY}"
+
+security:
+  max_upload_size_mb: 100
+  cors_origins:
+    - "http://wiki.internal.example.com"
+  registration_open: false
+
+retention:
+  snapshot_days: 30
+  task_history_days: 7
+  log_days: 90
+```
+
+### 启动校验
+
+FastAPI startup 阶段执行必填项校验：
+
+```python
+# 启动失败，如果缺少必要配置
+if not settings.llm_api_key:
+    raise ConfigError("LLM_WIKI_LLM_API_KEY 未设置。请设置环境变量或在 config.yaml 中配置。")
+if not settings.secret_key:
+    raise ConfigError("LLM_WIKI_SECRET_KEY 未设置。请生成一个随机字符串：openssl rand -hex 32")
+```
+
+---
+
+## 数据库 Schema 与初始化
+
+### SQLite 数据库文件
+
+```
+data/
+├── users.db           # 用户、项目成员
+├── tasks.db           # 任务队列（已在上文定义）
+├── audit.db           # 审计日志
+└── projects/          # 项目数据（文件系统）
+```
+
+### users.db
+
+```sql
+-- 初始化时自动创建
+
+CREATE TABLE users (
+    id          TEXT PRIMARY KEY,          -- UUID
+    username    TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,           -- bcrypt
+    display_name TEXT NOT NULL DEFAULT '',
+    role        TEXT NOT NULL DEFAULT 'user',  -- admin | user
+    is_active   INTEGER NOT NULL DEFAULT 1,
+    created_at  TEXT NOT NULL,             -- ISO 8601
+    last_login  TEXT
+);
+
+CREATE TABLE projects (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    status      TEXT NOT NULL DEFAULT 'active',   -- active | archived
+    created_by  TEXT NOT NULL REFERENCES users(id),
+    created_at  TEXT NOT NULL,
+    archived_at TEXT
+);
+
+CREATE TABLE project_members (
+    project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    role        TEXT NOT NULL DEFAULT 'editor',  -- owner | editor | viewer
+    joined_at   TEXT NOT NULL,
+    PRIMARY KEY (project_id, user_id)
+);
+
+-- 项目设置（JSON 存储，灵活扩展）
+CREATE TABLE project_settings (
+    project_id  TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    settings    TEXT NOT NULL DEFAULT '{}',      -- JSON blob
+    updated_at  TEXT NOT NULL
+);
+```
+
+### audit.db
+
+```sql
+-- 用户操作审计日志（详情见上方审计日志章节）
+
+CREATE TABLE audit_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp   TEXT NOT NULL,            -- ISO 8601
+    action      TEXT NOT NULL,            -- upload | overwrite | move | delete | ingest | graph_build | page_edit | page_rollback | ...
+    user_id     TEXT NOT NULL,
+    username    TEXT NOT NULL,
+    project_id  TEXT NOT NULL,
+    target      TEXT NOT NULL,            -- 文件路径或页面路径
+    detail      TEXT,                     -- JSON
+    result      TEXT NOT NULL,            -- success | failed | partial
+    error       TEXT                      -- 失败原因
+);
+
+CREATE INDEX idx_audit_project_time ON audit_log(project_id, timestamp);
+CREATE INDEX idx_audit_user ON audit_log(user_id);
+CREATE INDEX idx_audit_action ON audit_log(action);
+```
+
+### Schema 迁移
+
+使用 **Alembic** 管理 SQLite schema 版本：
+
+```
+backend/
+├── alembic/
+│   ├── versions/
+│   │   ├── 001_initial_users.py
+│   │   ├── 002_task_queue.py
+│   │   └── 003_project_settings.py
+│   └── env.py
+└── alembic.ini
+```
+
+```bash
+# 初始化（首次部署）
+alembic upgrade head
+
+# 升级到最新版本
+alembic upgrade head
+
+# 回退上一个版本
+alembic downgrade -1
+
+# 查看当前版本
+alembic current
+
+# 生成迁移脚本（模型变更后）
+alembic revision --autogenerate -m "add feature X table"
+```
+
+---
+
+## 初始部署流程
+
+### 首次部署步骤
+
+```bash
+# 1. 克隆仓库
+git clone <repo-url> /opt/llm-wiki
+cd /opt/llm-wiki/backend
+
+# 2. 创建虚拟环境
+python3.10 -m venv venv
+source venv/bin/activate
+
+# 3. 安装依赖
+pip install -r requirements.txt
+
+# 4. 安装可选 PDF 后端
+pip install pymupdf4llm           # 推荐
+# pip install marker-pdf          # 复杂排版需要
+# pip install arxiv2markdown      # arXiv 论文需要
+
+# 5. 生成配置
+cp config.example.yaml config.yaml
+# 编辑 config.yaml：设置 data_dir、llm.api_base、llm.api_key
+
+# 6. 生成 JWT 密钥
+export LLM_WIKI_SECRET_KEY=$(openssl rand -hex 32)
+
+# 7. 初始化数据库
+alembic upgrade head
+
+# 8. 创建管理员
+python tools/manage.py create-admin --username admin --password <password>
+
+# 9. 验证安装
+python tools/manage.py check
+# → [✓] 配置文件有效
+# → [✓] 数据目录可写: /data/llm-wiki
+# → [✓] LLM 连接成功: deepseek-v4-flash @ http://10.0.1.5:8000/v1
+# → [✓] 数据库初始化完成
+# → [✓] PDF 后端: pymupdf4llm ✓ / marker-pdf ✗ / arxiv2markdown ✗
+
+# 10. 启动服务
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+### 管理工具
+
+```bash
+# 创建管理员
+python tools/manage.py create-admin --username admin --password xxx
+
+# 重置密码
+python tools/manage.py reset-password --username admin --new-password xxx
+
+# 列出用户
+python tools/manage.py list-users
+
+# 禁用/启用用户
+python tools/manage.py set-user --username xxx --active false
+
+# 查看系统状态
+python tools/manage.py check
+
+# 手动触发全项目 re-ingest
+python tools/manage.py refresh-all --project-id xxx
+
+# 清理过期数据（快照、日志、已完成任务）
+python tools/manage.py cleanup --dry-run   # 预览
+python tools/manage.py cleanup             # 执行
+```
+
+### 前端构建与部署
+
+```bash
+cd frontend
+
+# 构建
+npm install
+npm run build          # → dist/
+
+# Nginx 配置
+server {
+    listen 80;
+    server_name wiki.internal.example.com;
+
+    root /opt/llm-wiki/frontend/dist;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+### 环境变量速查
+
+| 变量 | 必填 | 默认值 | 说明 |
+|------|------|--------|------|
+| `LLM_WIKI_SECRET_KEY` | ✅ | — | JWT 签名密钥，至少 32 字节随机字符串 |
+| `LLM_WIKI_LLM_API_KEY` | ✅ | — | DeepSeek API Key |
+| `LLM_WIKI_LLM_API_BASE` | ❌ | `http://localhost:8000/v1` | LLM 接口地址 |
+| `LLM_WIKI_LLM_MODEL` | ❌ | `deepseek-v4-flash` | 模型名称 |
+| `LLM_WIKI_DATA_DIR` | ❌ | `./data` | 数据存储根目录 |
+| `LLM_WIKI_PORT` | ❌ | `8000` | 服务监听端口 |
+| `LLM_WIKI_WORKERS` | ❌ | `2` | Gunicorn worker 数 |
+| `LLM_WIKI_LOG_LEVEL` | ❌ | `INFO` | 日志级别 |
+
+---
+
 ## 备份方案
 
 - **导出**：将项目下 `raw/` + `wiki/` + `graph/` + `audit_log` 打包为 tar.gz，含元信息 JSON
