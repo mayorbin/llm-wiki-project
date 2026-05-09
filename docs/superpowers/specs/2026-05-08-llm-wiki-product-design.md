@@ -203,7 +203,7 @@ frontend/
 ├── src/
 │   ├── App.vue
 │   ├── main.ts                 # Vue3 入口
-│   ├── router/index.ts
+│   ├── router/index.ts          # 路由定义 + 导航守卫（项目权限校验）
 │   ├── api/                    # 统一请求管理层
 │   │   ├── client.ts           # Axios 实例 + 拦截器
 │   │   ├── auth.ts             # 认证 API
@@ -218,14 +218,14 @@ frontend/
 │   │   ├── GraphView.vue           # 知识图谱
 │   │   └── SettingsView.vue        # 设置（备份/日志/LLM 配置）
 │   ├── components/
-│   │   ├── layout/             # AppShell / Sidebar / TopBar
+│   │   ├── layout/             # AppShell / Sidebar / ProjectSwitcher
 │   │   ├── files/              # DirTree / FileList / UploadDialog
 │   │   ├── wiki/               # PageViewer / PageEditor / QueryInput / QueryResult
 │   │   ├── graph/              # GraphCanvas / FilterPanel / NodeDetail (G6)
 │   │   └── common/             # ConfirmDialog / ProgressBar / EmptyState
 │   ├── lib/                    # markdown-it + DOMPurify 封装 / 工具函数
 │   ├── composables/            # useAuth / useWiki / useGraph
-│   ├── stores/                 # Pinia: auth / files / wiki / graph
+│   ├── stores/                 # Pinia: auth / project / files / wiki / graph
 │   └── types/
 ├── public/static/              # AntV G6 离线自托管
 ├── package.json
@@ -1943,12 +1943,136 @@ python tools/logs.py --follow
 | 路由 | 页面 | 说明 |
 |------|------|------|
 | `/login` | 登录 | JWT 认证 |
-| `/` | 知识库主页 | 源文件管理 + 查询（Tab 切换） |
-| `/graph` | 知识图谱 | AntV G6 v5 交互式图谱 |
-| `/settings` | 设置 | 项目信息、LLM 参数覆盖、备份恢复、审计日志 |
+| `/:projectId` | 知识库主页 | 源文件管理 + 查询（Tab 切换） |
+| `/:projectId/graph` | 知识图谱 | AntV G6 v5 交互式图谱 |
+| `/:projectId/settings` | 设置 | 项目信息、LLM 参数覆盖、备份恢复、审计日志 |
+
+所有项目内页面路由包含 `:projectId` 路径参数，前端根据当前项目 ID 加载对应数据。
+
+### 项目切换器
+
+位于侧边栏顶部，是用户切换工作上下文的入口。
+
+```
+┌─────────────────────────┐
+│  🧠 LLM Wiki            │  ← 品牌标识
+│                         │
+│  ┌─────────────────────┐│
+│  │ AI 研究知识库    ▾  ││  ← 项目切换器（当前项目）
+│  └─────────────────────┘│
+│                         │
+│  📖 知识库              │  ← 导航项（相对当前项目）
+│  🔗 知识图谱            │
+│  ⚙️ 设置               │
+│                         │
+│  ─────────────────────  │
+│  + 新建项目             │  ← 快捷入口
+│  📋 所有项目            │  ← 项目列表
+└─────────────────────────┘
+```
+
+点击项目切换器展开下拉面板：
+
+```
+┌──────────────────────────────┐
+│  🔍 搜索项目...              │  ← 输入过滤（> 5 个项目时显示）
+│                              │
+│  ● AI 研究知识库             │  ← 当前选中（圆点标记）
+│    3 个活跃任务              │  ← 摄入进行中提示
+│                              │
+│  ○ 竞品分析                  │
+│    最后摄入: 2 小时前        │
+│                              │
+│  ○ 会议记录归档              │
+│    📦 已归档                 │  ← 归档标记
+│                              │
+│  ────────────────────────────│
+│  ☐ 显示已归档项目 (2)        │  ← 默认隐藏归档
+│  ────────────────────────────│
+│  + 新建项目                  │
+└──────────────────────────────┘
+```
+
+#### 项目切换行为
+
+```
+用户切换项目
+    │
+    ▼
+1. 取消当前项目所有在途请求（AbortController）
+2. 路由跳转 /:newProjectId（保持当前子页面，如 /graph → /newId/graph）
+3. Pinia stores 重置（files/wiki/graph 清空）
+4. 重新加载新项目数据（目录树、wiki 页面树、图谱数据）
+5. 更新文档标题（document.title = "项目名 — LLM Wiki"）
+6. 保存上次访问项目到 localStorage，下次登录自动进入
+```
+
+#### 无项目状态
+
+用户登录后但未加入任何项目：
+
+```
+┌─────────────────────────┐
+│  🧠 LLM Wiki            │
+│                         │
+│  欢迎使用 LLM Wiki       │
+│                         │
+│  你还没有加入任何项目    │
+│                         │
+│  ┌──────────────────┐   │
+│  │  🚀 创建第一个项目 │   │
+│  └──────────────────┘   │
+│                         │
+│  或联系管理员将你        │
+│  加入已有项目            │
+└─────────────────────────┘
+```
+
+#### Pinia 项目 Store
+
+```typescript
+// src/stores/project.ts
+export const useProjectStore = defineStore('project', () => {
+  const projectId = ref<string | null>(null)
+  const project = ref<Project | null>(null)
+  const projects = ref<ProjectSummary[]>([])
+
+  // 路由守卫在每次导航时调用
+  async function setCurrentProject(id: string) {
+    if (id === projectId.value) return  // 相同项目，跳过
+
+    // 取消旧项目请求
+    cancelAllProjectRequests()
+
+    projectId.value = id
+    const detail = await projectApi.get(id)
+    project.value = detail
+
+    // 触发其他 store 重新加载
+    const filesStore = useFilesStore()
+    const wikiStore = useWikiStore()
+    const graphStore = useGraphStore()
+    await Promise.all([
+      filesStore.loadDirTree(id),
+      wikiStore.loadPageTree(id),
+      graphStore.loadStats(id),
+    ])
+
+    document.title = `${detail.name} — LLM Wiki`
+  }
+
+  return { projectId, project, projects, setCurrentProject }
+})
+```
+
+#### 全局 404 / 无权限页面
+
+- 路由 `/:projectId` 中 projectId 不存在 → 「项目不存在或你无权访问」
+- 用户被移除项目后刷新页面 → 同上
+- 提供「返回项目列表」按钮
 
 ### 导航结构
-侧边栏 4 项（从 6 项精简）：
+侧边栏 3 项 + 顶部项目切换器：
 - 📖 知识库（含子视图：源文件 / 查询）
 - 🔗 知识图谱
 - ⚙️ 设置
