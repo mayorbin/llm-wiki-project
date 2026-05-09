@@ -119,6 +119,14 @@ frontend/
 │   ├── App.vue
 │   ├── main.ts                 # Vue3 入口
 │   ├── router/index.ts
+│   ├── api/                    # 统一请求管理层
+│   │   ├── client.ts           # Axios 实例 + 拦截器
+│   │   ├── auth.ts             # 认证 API
+│   │   ├── files.ts            # 文件管理 API
+│   │   ├── ingestion.ts        # 摄入 API
+│   │   ├── knowledge.ts        # 知识查询 API
+│   │   ├── graph.ts            # 图谱 API
+│   │   └── maintenance.ts      # 备份/健康/审计 API
 │   ├── views/
 │   │   ├── KnowledgeBaseView.vue   # 知识库主页（源文件+查询子视图）
 │   │   ├── GraphView.vue           # 知识图谱
@@ -129,7 +137,7 @@ frontend/
 │   │   ├── wiki/               # PageViewer / QueryInput / QueryResult
 │   │   ├── graph/              # GraphCanvas / FilterPanel / NodeDetail (G6)
 │   │   └── common/             # ConfirmDialog / ProgressBar / EmptyState
-│   ├── composables/            # useApi / useAuth / useWiki / useGraph
+│   ├── composables/            # useAuth / useWiki / useGraph
 │   ├── stores/                 # Pinia: auth / files / wiki / graph
 │   └── types/
 ├── public/static/              # AntV G6 离线自托管
@@ -436,6 +444,180 @@ G6 内置能力与需求映射：
 | 空图谱 | 自定义状态 | `graph.render()` 前判断节点数为 0 → 显示空状态组件 |
 
 G6 离线自托管：`npm install @antv/g6` 后 Vite 打包进 dist/static，无 CDN 依赖。
+
+---
+
+## 前端请求管理
+
+所有前端 API 请求通过统一的请求管理层（`src/api/`）发起，组件和 composable 不直接调用 Axios。
+
+### 架构
+
+```
+组件 / Composable
+       │
+       ▼
+  src/api/*.ts          ← 各模块 API 函数（auth.ts / files.ts / ...）
+       │
+       ▼
+  src/api/client.ts     ← 统一 Axios 实例 + 拦截器
+       │
+       ▼
+  后端 FastAPI :8000
+```
+
+### client.ts — Axios 实例
+
+```typescript
+// src/api/client.ts
+import axios from 'axios'
+import type { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from 'axios'
+import { useAuthStore } from '@/stores/auth'
+import router from '@/router'
+
+const client: AxiosInstance = axios.create({
+  baseURL: '/api',
+  timeout: 30000,
+  headers: { 'Content-Type': 'application/json' },
+})
+
+// 请求拦截器：自动附加 JWT
+client.interceptors.request.use((config: InternalAxiosRequestConfig) => {
+  const auth = useAuthStore()
+  if (auth.token) {
+    config.headers.Authorization = `Bearer ${auth.token}`
+  }
+  return config
+})
+
+// 响应拦截器：统一错误处理 + Token 刷新
+client.interceptors.response.use(
+  (response) => response,
+  async (error: AxiosError) => {
+    if (error.response?.status === 401) {
+      const auth = useAuthStore()
+      try {
+        await auth.refreshToken()
+        // 重试原请求
+        return client.request(error.config!)
+      } catch {
+        auth.logout()
+        router.push('/login')
+      }
+    }
+    return Promise.reject(error)
+  }
+)
+
+export default client
+```
+
+### 错误码映射
+
+| HTTP 状态码 | 含义 | 前端处理 |
+|-------------|------|----------|
+| 400 | 请求参数错误 | Toast 显示 `response.data.detail` |
+| 401 | Token 过期 | 自动刷新 Token，失败则跳登录 |
+| 403 | 权限不足 | Toast "无权执行此操作" |
+| 404 | 资源不存在 | 返回 null，由调用方处理 |
+| 409 | 并发冲突 | 返回当前 task_id，前端提示"操作排队中" |
+| 422 | 参数校验失败 | 表单字段内联错误提示 |
+| 423 | 资源锁定 | 提示"操作繁忙，请稍后重试"，3s 后自动重试 |
+| 429 | 请求过于频繁 | 显示 Retry-After 倒计时 |
+| 5xx | 服务端错误 | Toast "服务器异常"，上报 Sentry（如有） |
+
+### 请求取消
+
+长时间查询和文件上传支持用户主动取消：
+
+```typescript
+// src/api/client.ts
+import { ref } from 'vue'
+
+// 全局请求取消 Map
+export const pendingRequests = new Map<string, AbortController>()
+
+export function createCancelableRequest(key: string) {
+  pendingRequests.get(key)?.abort()   // 取消前任请求
+  const controller = new AbortController()
+  pendingRequests.set(key, controller)
+  return { signal: controller.signal, key }
+}
+
+export function cancelRequest(key: string) {
+  pendingRequests.get(key)?.abort()
+  pendingRequests.delete(key)
+}
+```
+
+使用场景：
+- 用户快速切换知识库项目 → 取消前一个项目的未完成请求
+- 用户在查询结果返回前输入新问题 → 取消上一次查询
+- 用户取消文件上传
+
+### 加载状态管理
+
+```typescript
+// src/api/client.ts — 全局请求计数器
+import { ref } from 'vue'
+
+export const activeRequests = ref(0)
+
+client.interceptors.request.use((config) => {
+  activeRequests.value++
+  return config
+})
+
+client.interceptors.response.use(
+  (response) => { activeRequests.value--; return response },
+  (error) => { activeRequests.value--; return Promise.reject(error) }
+)
+
+// 组件中使用：顶部全局 Loading 条
+// <ProgressBar v-if="activeRequests > 0" />
+```
+
+单个操作的加载状态由各 API 函数返回 Promise，调用方自行管理 `isLoading` ref。
+
+### 模块 API 示例
+
+```typescript
+// src/api/files.ts
+import client from './client'
+import type { FileItem, DirTree, UploadResponse } from '@/types'
+
+export const filesApi = {
+  /** 获取目录树 */
+  getDirTree(projectId: string, subdir?: string) {
+    return client.get<DirTree>('/files/dirs', { params: { project_id: projectId, dir: subdir } })
+  },
+
+  /** 上传文件（multipart，带进度回调） */
+  uploadFile(projectId: string, subdir: string, file: File, onProgress?: (pct: number) => void) {
+    const form = new FormData()
+    form.append('project_id', projectId)
+    form.append('subdir', subdir)
+    form.append('file', file)
+    return client.post<UploadResponse>('/files/upload', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      onUploadProgress: (e) => onProgress?.(Math.round((e.progress ?? 0) * 100)),
+    })
+  },
+
+  /** 删除文件（需确认） */
+  deleteFile(fileId: string) {
+    return client.delete(`/files/${fileId}`)
+  },
+}
+```
+
+### 设计原则
+
+- **组件不直接调 Axios** — 所有请求经过 `src/api/`，便于统一改 baseURL/超时/拦截逻辑
+- **API 函数按资源模块拆分** — 与后端 API 路由一一对应
+- **错误不吞没** — 拦截器统一处理后仍向调用方 reject，让上层感知错误
+- **取消优于等待** — 页面切换或重复操作时主动取消旧请求
+- **加载状态分层** — 全局进度条（activeRequests）+ 局部按钮 loading（各组件自主管理）
 
 ---
 
