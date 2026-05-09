@@ -344,6 +344,7 @@ frontend/
 | `llm.max_tokens` | 下次摄入生效 |
 | `llm.system_prompt_append` | 下次摄入生效，追加在标准 Prompt 末尾 |
 | `features.auto_ingest_on_upload` | 即时生效 |
+| `features.auto_graph_rebuild` | 即时生效（关闭后摄入跳过 Step 5，status 标记 completed_without_graph） |
 | `features.registration_open` | 即时生效 |
 | `status: active → archived` | 归档项目：只读访问，拒绝摄入和编辑，隐藏于默认项目列表 |
 | `status: archived → active` | 重新激活：恢复完全功能 |
@@ -1973,7 +1974,7 @@ python tools/logs.py --follow
 
 ### P1 交互保护
 - **删除确认**：弹出对话框，显示将被级联删除的 wiki 页面列表，提供"仅删文件/同时清理 wiki"选项
-- **摄入进度**：5 步可视化进度条（转换→LLM 提取→写页面→更新索引→重建图谱），每步显示耗时
+- **摄入进度**：5 步进度条（转换→LLM 提取→写页面→更新索引→[重建图谱]），Step 5 根据 `auto_graph_rebuild` 设置条件执行
 
 ### 摄入失败处理
 
@@ -2003,10 +2004,64 @@ python tools/logs.py --follow
   │       原因：磁盘满 / 权限不足 / 文件被锁定
   │       可重试？ 否（需运维介入）
   │
-  └─ 步骤 5: 图谱重建
+  └─ 步骤 5: 图谱重建（条件执行）
+      └─ 条件：仅在 features.auto_graph_rebuild = true 时执行
+              为 false 時跳过，摄入状态标记为 completed_without_graph
       └─ 失败 → 类型：GRAPH_ERROR
           原因：NetworkX 内存溢出 / JSON 序列化失败
           可重试？ 部分（wiki 已写入成功，图谱可稍后手动重建）
+```
+
+### 摄入 Pipeline 与独立图谱构建的关系
+
+#### 决策表
+
+| 场景 | 摄入 Pipeline Step 5 | 图谱更新方式 |
+|------|---------------------|-------------|
+| `auto_graph_rebuild: true` | 自动执行（摄入成功 → 立即重建） | 摄入 task 内部完成 |
+| `auto_graph_rebuild: false` | 跳过（摄入完成但带提示） | 用户手动调用 `POST /api/graph/build` |
+| 手动编辑 wiki 页面 | N/A（不触发摄入） | 前端提示或用户手动调用 |
+| Re-ingest（refresh） | 同 `auto_graph_rebuild` 设置 | 同上 |
+| Rollback 摄入 | 强制自动重建（不可跳过） | 回滚 task 内部完成 |
+| 用户手动 `POST /api/graph/build` | N/A | 独立 task，走任务队列 |
+
+#### 摄入完成后前端提示
+
+当 `auto_graph_rebuild: false` 时，摄入 status = `completed_without_graph`：
+
+```
+摄入完成 — 3 个页面已更新
+
+图谱未更新（自动重建已关闭）
+
+[🔗 立即重建图谱]   [查看页面]   [关闭]
+```
+
+#### 独立 graph/build 走任务队列
+
+`POST /api/graph/build` 创建 `action: "graph_build"` 的持久化任务，与摄入任务共享同一项目写锁：
+
+```
+POST /api/graph/build { project_id: "xxx" }
+  → 创建 task (action="graph_build", status="queued")
+  → 写入 task_queue 表
+  → 加入 ProjectQueue（排队等待项目写锁）
+  → 返回 task_id
+
+GET /api/ingestion/status/{task_id}
+  → { status: "running", progress: 75, ... }
+  → 图谱构建同样通过摄入状态 API 查询进度
+```
+
+独立图谱构建与摄入中的 Step 5 使用**完全相同的代码路径**（`GraphService.rebuild()`），区别仅在于触发方式（自动 vs 手动）。
+
+```python
+class GraphService:
+    def rebuild(self, project_id: str, triggered_by: str) -> GraphResult:
+        """
+        triggered_by: "ingestion_step5" | "manual_build" | "rollback" | "page_edit"
+        仅用于日志区分，逻辑完全一致。
+        """
 ```
 
 #### API 返回格式
