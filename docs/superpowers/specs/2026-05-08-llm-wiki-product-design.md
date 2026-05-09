@@ -572,14 +572,136 @@ pip install arxiv2markdown
 所有文件操作自动级联更新，保证三者一致：
 
 ### 上传/覆盖
+
 ```
 上传文件 → ConvertEngine 转换
-         → IngestService 摄入
-         → 写入 wiki 页面
-         → 更新 index.md / log.md
-         → GraphService 重建图谱
+         → 检测是否已存在同名文件
+           ├─ 不存在 → 新建摄入
+           │           → IngestService 摄入
+           │           → 写入 wiki 页面
+           │           → 更新 index.md / log.md
+           │           → GraphService 重建图谱
+           │
+           └─ 已存在（覆盖上传） → 对比 SHA256
+               ├─ 内容相同 → 跳过摄入（返回 200 "未变更"）
+               └─ 内容不同 → 清理旧 wiki → 重新摄入 → 重建图谱
 ```
-覆盖时先清理旧 wiki 页面再重新摄入。
+
+覆盖操作用户确认：
+- 上传 API 检测到同名文件时，返回 `{"exists": true, "current_hash": "xxx", "last_ingest": "2026-05-09"}`，由前端二次确认
+- 用户确认后才执行覆盖，避免误覆盖
+
+### Re-Ingest（文件外部变更检测）
+
+用户可能通过文件系统直接替换 `raw/` 中的文件（rsync、脚本同步、手动复制等），前端不知道。需要主动检测变更并重新摄入。
+
+#### 变更检测
+
+每次触发 refresh / re-ingest 时，对比文件的 `mtime` + `SHA256` 与上次摄入时记录的值：
+
+```python
+class FileService:
+    def detect_changes(self, project_id: str) -> list[ChangeRecord]:
+        changed = []
+        for source_file in self.list_source_files(project_id):
+            current_hash = sha256(source_file.path)
+            last_ingest = self.get_last_ingest_record(source_file.id)
+
+            if last_ingest is None:
+                # 未摄入过的新文件
+                changed.append(ChangeRecord(
+                    file=source_file,
+                    status="new",
+                    action="ingest",
+                ))
+            elif current_hash != last_ingest.source_hash:
+                # 内容已变更
+                changed.append(ChangeRecord(
+                    file=source_file,
+                    status="modified",
+                    old_hash=last_ingest.source_hash,
+                    new_hash=current_hash,
+                    action="re_ingest",
+                ))
+            # 内容未变，跳过
+        return changed
+```
+
+#### API
+
+```
+POST /api/files/detect-changes?project_id=xxx
+  → 扫描整个 raw/，返回变更文件列表
+
+{
+  "total_files": 45,
+  "changed": [
+    {"file_id": "f_1", "path": "raw/论文/attention.pdf", "status": "modified", "action": "re_ingest"},
+    {"file_id": "f_3", "path": "raw/会议记录/new-meeting.docx", "status": "new", "action": "ingest"},
+  ],
+  "unchanged": 43
+}
+```
+
+```
+POST /api/files/refresh
+  body: { "project_id": "xxx", "file_ids": ["f_1", "f_2", ...] }
+  → 对指定文件列表执行 re-ingest
+  → 返回 task_id 列表（每个文件一个任务，排队执行）
+```
+
+```
+POST /api/files/refresh-all?project_id=xxx
+  → 自动检测全项目变更 → 对所有变更文件执行 re-ingest
+  → 返回总结: { "new": 2, "modified": 3, "skipped": 40, "task_ids": [...] }
+```
+
+#### 自动检测触发时机
+
+| 触发方式 | 说明 |
+|---------|------|
+| **手动触发** | 用户在文件管理页点击「检测变更」按钮，预览变更列表，勾选确认后执行 |
+| **定期检测** | 项目设置中可配置 cron 表达式（如每天凌晨 3 点），自动检测并 re-ingest |
+| **Webhook** | 外部系统通过 `POST /api/files/refresh-all` 主动触发（如 rsync 脚本末尾调用） |
+| **上传时关联检测** | 用户通过网页上传文件时，不触发全量检测，仅对本次上传做覆盖判断 |
+
+#### 与摄入任务队列的关系
+
+- re-ingest 复用相同的摄入任务队列和锁机制
+- re-ingest 文件与普通摄入任务无区别，排队执行
+- 如果 re-ingest 时上一个摄入正在运行，变更文件加入排队（不会冲突，队列保证顺序）
+- re-ingest 同样受项目写锁保护
+
+#### 前端 UI
+
+文件管理页顶部工具栏增加：
+
+```
+[📤 上传文件]  [📤 批量上传]  [🔄 检测变更]  [⚙️ 自动检测: 每天 03:00 ▼]
+```
+
+点击「检测变更」→ 弹出变更预览对话框：
+
+```
+┌──────────────────────────────────────────────────┐
+│  检测到 3 个文件变更                               │
+│                                                  │
+│  📄 论文/attention.pdf                           │
+│     修改于 2026-05-09 16:30                       │
+│     上次摄入: 2026-05-08 14:30 (SHA256 已变更)     │
+│     ☑ 重新摄入                                   │
+│                                                  │
+│  📄 技术文档/api-design.md                        │
+│     新增文件，从未摄入                             │
+│     ☑ 摄入                                       │
+│                                                  │
+│  📄 会议记录/q1-review.docx                       │
+│     mtime 变更但内容未变 (SHA256 相同)              │
+│     ☐ 跳过                                       │
+│                                                  │
+│  [确认执行]  [取消]                                │
+└──────────────────────────────────────────────────┘
+```
 
 ### 移动
 ```
