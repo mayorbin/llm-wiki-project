@@ -292,7 +292,8 @@ def sanitize_filename(filename: str) -> str:
 #### 摄入
 - `POST /api/ingestion/trigger` — 触发摄入（单文件或批量）
 - `GET /api/ingestion/status/{task_id}` — 摄入进度（5 步分阶段）
-- `GET /api/ingestion/history` — 历史记录
+- `GET /api/ingestion/history` — 历史记录（含快照状态）
+- `POST /api/ingestion/rollback/{task_id}` — 回滚摄入（从快照恢复）
 
 #### 知识查询
 - `POST /api/knowledge/query` — LLM 综合回答，附 `[[wikilink]]` 引用
@@ -368,6 +369,125 @@ def sanitize_filename(filename: str) -> str:
 - 文件保存失败 → 终止，不触发摄入
 - 摄入失败 → wiki 不写入，源文件保留
 - 图谱构建失败 → 保留旧图谱，日志告警
+
+### Wiki 页面版本历史与回滚
+
+摄入成功但输出质量差（LLM 生成内容不当、格式错误、遗漏关键信息）是常见场景。提供轻量级快照机制，不引入 Git 等外部依赖。
+
+#### 快照存储
+
+```
+wiki/.history/
+├── {task_id-1}/                # 每次摄入一个快照目录
+│   ├── manifest.json           # 快照元信息
+│   ├── sources/
+│   │   └── attention-paper.md  # 被修改页面的副本
+│   ├── entities/
+│   │   └── Self-Attention.md
+│   └── concepts/
+│       └── Transformer.md
+├── {task_id-2}/
+│   └── ...
+└── .retention                  # 保留策略配置
+```
+
+`manifest.json`：
+```json
+{
+  "task_id": "uuid",
+  "timestamp": "2026-05-09T14:30:00+08:00",
+  "action": "ingest",
+  "user_id": "u_xxx",
+  "username": "张三",
+  "source_file": "raw/论文/attention.pdf",
+  "changed_pages": [
+    {"path": "sources/attention-paper.md", "type": "created"},
+    {"path": "entities/Self-Attention.md", "type": "updated"},
+    {"path": "concepts/Transformer.md", "type": "updated"},
+    {"path": "index.md", "type": "updated"},
+    {"path": "overview.md", "type": "updated"},
+    {"path": "log.md", "type": "updated"}
+  ],
+  "total_pages": 6
+}
+```
+
+#### 工作流程
+
+```
+摄入开始
+    │
+    ▼
+扫描即将被修改的页面列表（新旧 entity/concept/source + index/log/overview）
+    │
+    ▼
+将当前版本复制到 wiki/.history/{task_id}/
+    │
+    ▼
+执行摄入（写入新页面内容）
+    │
+    ├─ 摄入成功 → 标记快照 complete，保留 N 天
+    │
+    └─ 摄入失败 → 从快照恢复原始内容 → 删除快照目录
+```
+
+#### 回滚 API
+
+```
+POST /api/ingestion/rollback/{task_id}
+```
+
+执行流程：
+1. 校验 task_id 对应的快照存在且未被更晚的操作覆盖
+2. 将快照中的文件逐份复制回 wiki/ 对应位置（原子写入）
+3. 清理本次摄入创建的新文件（快照中不存在的页面）
+4. 追加回滚日志到 wiki/log.md
+5. 触发图谱重建
+
+```python
+def rollback_ingestion(project_id: str, task_id: str) -> RollbackResult:
+    snapshot_dir = get_snapshot_dir(project_id, task_id)
+    if not snapshot_dir.exists():
+        raise SnapshotNotFound(task_id)
+
+    manifest = json.loads((snapshot_dir / "manifest.json").read_text())
+
+    # 1. 从快照恢复被修改的页面
+    for page in manifest["changed_pages"]:
+        snapshot_file = snapshot_dir / page["path"]
+        target = WIKI_DIR / page["path"]
+        if page["type"] == "created":
+            target.unlink(missing_ok=True)  # 新创建的页面直接删除
+        elif snapshot_file.exists():
+            atomic_write(target, snapshot_file.read_text())  # 还原
+
+    # 2. 清理残留（快照后新产生的页面）
+    snapshot_paths = {snapshot_dir / p["path"] for p in manifest["changed_pages"]}
+    # ... 删除不在快照中的关联页面
+
+    # 3. 日志
+    append_log(f"## [{today}] rollback | task={task_id} | 回滚了 {len(manifest['changed_pages'])} 个页面")
+
+    # 4. 重建图谱
+    graph_service.rebuild(project_id)
+
+    return RollbackResult(restored=len(manifest["changed_pages"]))
+```
+
+#### 保留策略
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| 快照保留天数 | 30 天 | 超过的自动清理 |
+| 每项目最大快照数 | 50 | 触发清理最旧的 |
+| 清理时机 | health check 中执行 | 每次健康检查自动清理过期快照 |
+| 备份行为 | 随备份包导出 | 恢复备份时历史快照一并恢复 |
+
+#### 与并发锁的关系
+
+- 回滚操作持有项目级写锁（与摄入相同级别）
+- 回滚等待当前摄入完成，或当前摄入等待回滚完成
+- 正在回滚时，新的摄入请求返回 423 Locked
 
 ---
 
