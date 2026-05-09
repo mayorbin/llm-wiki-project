@@ -55,7 +55,9 @@ data/
 | **触发 Re-Ingest** `POST /api/files/refresh*` | ✅ | ✅ | ❌ |
 | **构建图谱** `POST /api/graph/build` | ✅ | ✅ | ❌ |
 | **运行 Lint** `POST /api/lint` | ✅ | ✅ | ❌ |
-| **运行 Health** `GET /api/health` | ✅ | ✅ | ✅ |
+| **存活探针** `GET /api/ping` | ✅（公开） | ✅（公开） | ✅（公开） |
+| **就绪探针** `GET /api/health` | ✅（公开） | ✅（公开） | ✅（公开） |
+| **项目健康检查** `GET /api/projects/{id}/health` | ✅ | ✅ | ✅ |
 | **查看审计日志** `GET /api/audit-log` | ✅ | ✅ | ❌ |
 | **修改项目设置** `PATCH /api/projects/{id}/settings` | ✅ | ❌ | ❌ |
 | **修改项目信息** `PATCH /api/projects/{id}` | ✅ | ❌ | ❌ |
@@ -517,10 +519,71 @@ def sanitize_filename(filename: str) -> str:
 - `POST /api/admin/projects/{id}/takeover` — 接管无主项目
 - `GET /api/admin/audit-log` — 全平台审计日志
 
+#### 公共（无需认证）
+
+- `GET /api/ping` — 存活探针（K8s liveness probe / LB health check）
+- `GET /api/health` — 就绪探针（含依赖检查，K8s readiness probe）
+
+##### 端点语义
+
+```json
+// GET /api/ping — 仅验证进程存活，零依赖调用，<1ms
+// HTTP 200
+{ "status": "ok", "version": "0.1.0", "uptime_seconds": 123456 }
+
+// GET /api/health — 验证进程 + 关键依赖可用
+// HTTP 200 或 503
+{
+  "status": "healthy",           // healthy | degraded | unhealthy
+  "version": "0.1.0",
+  "uptime_seconds": 123456,
+  "checks": {
+    "database": "ok",            // ok | error
+    "file_system": "ok",         // data/ 目录可读写
+    "llm_api": "ok",             // LLM 接口可达（可选，由 ?deep=true 触发）
+    "disk_usage": "42%"          // 磁盘使用率
+  }
+}
+```
+
+| 端点 | 认证 | 用途 | 检查深度 |
+|------|------|------|---------|
+| `GET /api/ping` | ❌ 无需 | Liveness probe | 仅进程存活 |
+| `GET /api/health` | ❌ 无需 | Readiness probe | 进程 + DB + 文件系统 |
+| `GET /api/health?deep=true` | ❌ 无需 | 深度健康检查 | 含 LLM 连通性验证（较慢） |
+| `GET /api/projects/{id}/health` | ✅ 需认证 | 项目级结构检查 | wiki 页面完整性（empty/stub/index sync） |
+
+##### Nginx 配置
+
+```nginx
+# 健康检查请求不记录 access log，也不代理到后端时保持轻量
+location = /api/ping {
+    proxy_pass http://backend:8000;
+    access_log off;
+}
+```
+
+##### K8s Probe 配置
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /api/ping
+    port: 8000
+  initialDelaySeconds: 10
+  periodSeconds: 30
+
+readinessProbe:
+  httpGet:
+    path: /api/health
+    port: 8000
+  initialDelaySeconds: 5
+  periodSeconds: 15
+```
+
 #### 维护（Owner + Editor）
 - `POST /api/backup/export` — 导出 tar.gz
 - `POST /api/backup/import` — 恢复备份（Owner only）
-- `GET /api/health` — 结构健康检查
 - `POST /api/lint` — 语义质量检查
 - `GET /api/audit-log` — 项目审计日志查询（支持筛选/分页/导出 CSV）
 
