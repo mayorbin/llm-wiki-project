@@ -2386,14 +2386,40 @@ body: { "task_ids": ["t1", "t2", "t3"] }
 侧边栏的状态圆点也通过轮询更新（低频 30s 一次，查最近一个任务的终态）：
 
 ```typescript
-// 每 30s 查询一次全局状态，更新侧边栏圆点颜色
-setInterval(async () => {
-  const history = await ingestionApi.getHistory({ limit: 1 })
-  latestStatus.value = history.data[0]?.status ?? 'none'
-}, 30000)
+// 使用递归 setTimeout，确保上一次请求完成后再启动下一次
+let timer: ReturnType<typeof setTimeout>
+
+function schedulePoll() {
+  timer = setTimeout(async () => {
+    try {
+      const history = await ingestionApi.getHistory({ limit: 1 })
+      latestStatus.value = history.data[0]?.status ?? 'none'
+    } catch {
+      // 静默失败，不影响下次轮询
+    } finally {
+      schedulePoll()  // 请求完成后才安排下一次
+    }
+  }, 30000)
+}
+
+schedulePoll()
+
+// 组件卸载时
+onUnmounted(() => clearTimeout(timer))
 ```
 
----
+### 为什么不用 setInterval
+
+所有轮询统一使用**递归 `setTimeout`**，不使用 `setInterval`：
+
+| 问题 | `setInterval` | 递归 `setTimeout` |
+|------|--------------|-------------------|
+| 请求堆积 | 如果上次请求耗时 > 间隔，新请求立即触发，可能堆积多个并发请求 | 上次请求完成后才安排下一次，永远只有一个在途请求 |
+| 回调异常 | 某次回调抛出异常，后续仍继续执行（可能重复失败） | 异常被 try/catch 捕获，不影响下一次调度 |
+| 清理 | 需要保存 interval ID 并在 onUnmounted 中 clearInterval | 同样需要保存 timeout ID，但递归链自然断裂更容易 |
+| 退避调整 | 动态改变间隔需要 clearInterval + 重新 setInterval | 直接传入新的延迟值即可 |
+
+递归 `setTimeout` 的核心原则：**下一次轮询在上一次请求完成后才开始计时**，请求本身不重叠。
 
 ## 配置管理
 
