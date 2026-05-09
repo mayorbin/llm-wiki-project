@@ -40,9 +40,9 @@ async def lifespan(app: FastAPI):
 
     init_db(settings.data_dir)
 
-    # 恢复未完成的任务（Task 14 实现后启用）
-    # from app.services.task_queue import recover_tasks_on_startup
-    # await recover_tasks_on_startup()
+    # 恢复未完成的任务
+    from app.services.task_queue import recover_tasks_on_startup
+    await recover_tasks_on_startup()
 
     yield  # 应用运行中
 
@@ -67,7 +67,7 @@ app.add_middleware(
 
 # ── 路由注册 ──
 
-from app.api import auth, projects, files, ingestion, knowledge, graph, maintenance
+from app.api import auth, projects, files, ingestion, knowledge, graph, maintenance, admin
 
 app.include_router(auth.router, prefix="/api", tags=["认证"])
 app.include_router(projects.router, prefix="/api", tags=["项目"])
@@ -76,6 +76,7 @@ app.include_router(ingestion.router, prefix="/api", tags=["摄入"])
 app.include_router(knowledge.router, prefix="/api", tags=["知识"])
 app.include_router(graph.router, prefix="/api", tags=["图谱"])
 app.include_router(maintenance.router, prefix="/api", tags=["维护"])
+app.include_router(admin.router, prefix="/api/admin", tags=["管理"])
 
 
 # ── 公共健康检查端点（无需认证） ──
