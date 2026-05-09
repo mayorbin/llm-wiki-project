@@ -124,6 +124,7 @@ frontend/
 │   │   ├── client.ts           # Axios 实例 + 拦截器
 │   │   ├── auth.ts             # 认证 API
 │   │   ├── files.ts            # 文件管理 API
+│   │   ├── projects.ts         # 项目管理 API
 │   │   ├── ingestion.ts        # 摄入 API
 │   │   ├── knowledge.ts        # 知识查询 API
 │   │   ├── graph.ts            # 图谱 API
@@ -165,7 +166,70 @@ frontend/
 - `GET /api/projects` — 用户所属项目列表
 - `POST /api/projects` — 创建项目
 - `GET /api/projects/{id}` — 项目详情
+- `PATCH /api/projects/{id}` — 更新项目基本信息（名称、描述）
 - `DELETE /api/projects/{id}` — 删除项目
+
+#### 项目设置
+- `GET /api/projects/{id}/settings` — 项目完整设置
+- `PATCH /api/projects/{id}/settings` — 更新项目设置
+
+##### 设置结构
+
+```json
+{
+  "project": {
+    "name": "AI 研究知识库",
+    "description": "追踪 Transformer 系列论文和工程实践",
+    "status": "active",           // active | archived
+    "created_at": "2026-05-01T10:00:00+08:00",
+    "archived_at": null
+  },
+  "llm": {
+    "provider": "deepseek",
+    "model": "deepseek-v4-flash",
+    "temperature": 0.3,            // 0.0–2.0，默认 0.3（知识提取需要确定性）
+    "max_tokens": 8192,            // 默认 8192，大文件摄入可调大
+    "timeout": 120,                // 秒，默认 120
+    "retry": 3,                    // 最大重试次数，默认 3
+    "system_prompt_append": ""     // 项目级 System Prompt 追加（可选）
+  },
+  "features": {
+    "auto_ingest_on_upload": true, // 上传后自动触发摄入
+    "auto_graph_rebuild": true,    // 摄入后自动重建图谱
+    "registration_open": false,    // 是否允许自由注册加入项目
+    "snapshot_retention_days": 30  // 快照保留天数
+  }
+}
+```
+
+##### 设置变更行为
+
+| 设置 | 变更后行为 |
+|------|-----------|
+| `llm.temperature` | 下次摄入生效，不影响进行中任务 |
+| `llm.max_tokens` | 下次摄入生效 |
+| `llm.system_prompt_append` | 下次摄入生效，追加在标准 Prompt 末尾 |
+| `features.auto_ingest_on_upload` | 即时生效 |
+| `features.registration_open` | 即时生效 |
+| `status: active → archived` | 归档项目：只读访问，拒绝摄入和编辑，隐藏于默认项目列表 |
+| `status: archived → active` | 重新激活：恢复完全功能 |
+
+##### 项目归档
+
+归档后的行为限制：
+
+| 操作 | archived 状态 |
+|------|--------------|
+| 查询知识库 | ✅ 允许 |
+| 浏览 wiki 页面 | ✅ 允许 |
+| 查看图谱 | ✅ 允许 |
+| 上传文件 | ❌ 返回 403 "项目已归档" |
+| 触发摄入 | ❌ 返回 403 |
+| 编辑 wiki 页面 | ❌ 返回 403 |
+| 删除文件 | ❌ 返回 403 |
+| 导出备份 | ✅ 允许 |
+| 删除项目 | ✅ Owner 允许 |
+| 归档后首页列表 | 默认隐藏，勾选"显示已归档"可见 |
 
 #### 文件与目录管理
 - `GET /api/files/dirs` — 浏览 raw/ 目录树
@@ -987,7 +1051,7 @@ timestamp | action | user_id | username | project_id | target | detail(JSON) | r
 | `/login` | 登录 | JWT 认证 |
 | `/` | 知识库主页 | 源文件管理 + 查询（Tab 切换） |
 | `/graph` | 知识图谱 | AntV G6 v5 交互式图谱 |
-| `/settings` | 设置 | LLM 配置、备份恢复、审计日志 |
+| `/settings` | 设置 | 项目信息、LLM 参数覆盖、备份恢复、审计日志 |
 
 ### 导航结构
 侧边栏 4 项（从 6 项精简）：
