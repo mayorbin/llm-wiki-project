@@ -135,7 +135,7 @@ frontend/
 │   ├── components/
 │   │   ├── layout/             # AppShell / Sidebar / TopBar
 │   │   ├── files/              # DirTree / FileList / UploadDialog
-│   │   ├── wiki/               # PageViewer / QueryInput / QueryResult
+│   │   ├── wiki/               # PageViewer / PageEditor / QueryInput / QueryResult
 │   │   ├── graph/              # GraphCanvas / FilterPanel / NodeDetail (G6)
 │   │   └── common/             # ConfirmDialog / ProgressBar / EmptyState
 │   ├── lib/                    # markdown-it + DOMPurify 封装 / 工具函数
@@ -301,7 +301,9 @@ def sanitize_filename(filename: str) -> str:
 #### 知识查询
 - `POST /api/knowledge/query` — LLM 综合回答，附 `[[wikilink]]` 引用
 - `GET /api/knowledge/pages` — Wiki 页面列表/树
-- `GET /api/knowledge/pages/{path}` — 读取页面 markdown
+- `GET /api/knowledge/pages/{path}` — 读取页面 markdown（含 frontmatter 元信息）
+- `PUT /api/knowledge/pages/{path}` — 更新页面内容（手动修正）
+- `GET /api/knowledge/pages/{path}/history` — 页面编辑历史
 
 #### 图谱
 - `GET /api/graph/data` — 节点 + 边 JSON
@@ -323,6 +325,7 @@ def sanitize_filename(filename: str) -> str:
 | FileService | 上传/目录管理/删除/移动，编排文件→wiki→图谱联动 | ConvertEngine, IngestService, GraphService |
 | IngestService | 摄入流程编排：读文件→调 LLM→写页面→更新索引→验证 | WikiEngine, LLMEngine |
 | QueryService | 查 index→找相关页→LLM 综合回答→可选保存 | WikiEngine, LLMEngine |
+| PageService | Wiki 页面手动编辑、编辑快照、历史查询、wikilink 自动修正 | WikiEngine, GraphService |
 | GraphService | 双 Pass 构建 + Louvain + SHA256 缓存 | WikiEngine, LLMEngine, GraphEngine |
 | LintService | Orphan/Broken/矛盾检测 | WikiEngine, LLMEngine |
 | BackupService | 全量导出/恢复/校验 | WikiEngine |
@@ -840,6 +843,122 @@ def atomic_write(path: Path, content: str):
 
 - 读者永远读到完整内容（要么旧版本，要么新版本）
 - 写入过程崩溃不会损坏现有文件（.tmp 残留，health check 定期清理）
+
+---
+
+## Wiki 页面手动编辑
+
+用户可以通过前端编辑器直接修改 wiki 页面内容，用于修正 LLM 错误提取、补充遗漏信息、调整 wikilink 等场景。
+
+### 编辑 API
+
+```
+PUT /api/knowledge/pages/{path}
+Content-Type: application/json
+
+{
+  "content": "## Summary\n更新后的 markdown 内容...",
+  "edit_summary": "修正了 Transformer 的提出年份，补充了参数量数据"
+}
+```
+
+### 编辑流程
+
+```
+用户打开页面 → 前端渲染预览
+                      │
+              [点击"编辑"按钮]
+                      │
+                      ▼
+              切换到编辑模式（Markdown 源码编辑器）
+                      │
+             用户修改内容 → 实时预览（可选）
+                      │
+              [点击"保存"]
+                      │
+                      ▼
+              后端 PUT 处理：
+              ├─ 1. 权限校验（需要 Editor 角色）
+              ├─ 2. 保存编辑前快照到 wiki/.edits/{page}/
+              ├─ 3. 更新页面 Markdown
+              ├─ 4. 更新 frontmatter last_updated
+              ├─ 5. 扫描新 wikilink → 检测 broken links → 提示或自动创建 stub
+              ├─ 6. 写入 audit_log
+              └─ 7. 触发增量图谱重建（仅受影响节点）
+```
+
+### 编辑快照
+
+与摄入快照分开管理，粒度更细（单页面级别）：
+
+```
+wiki/.edits/
+├── sources/
+│   └── attention-paper/
+│       ├── 2026-05-09T14-30-00_u-abc.md   # 编辑前快照
+│       ├── 2026-05-09T16-22-00_u-xyz.md
+│       └── .manifest.json                   # 快照索引
+├── entities/
+│   └── Self-Attention/
+│       └── 2026-05-09T15-10-00_u-abc.md
+└── concepts/
+    └── Transformer/
+        └── ...
+```
+
+`manifest.json` 记录每页的编辑链：
+```json
+{
+  "page": "sources/attention-paper.md",
+  "edits": [
+    {"timestamp": "2026-05-09T14:30:00", "user": "u_abc", "summary": "修正 Transformer 提出年份"},
+    {"timestamp": "2026-05-09T16:22:00", "user": "u_xyz", "summary": "补充参数量数据"}
+  ]
+}
+```
+
+### 页面历史 API
+
+```
+GET /api/knowledge/pages/{path}/history
+
+→ {
+  "page": "sources/attention-paper.md",
+  "created_by": "ingest task_123",
+  "edits": [
+    {"version": 3, "timestamp": "...", "user": "u_xyz", "summary": "..."},
+    {"version": 2, "timestamp": "...", "user": "u_abc", "summary": "..."},
+    {"version": 1, "timestamp": "...", "user": "ingest", "summary": "初始摄入"}
+  ]
+}
+```
+
+- 前端可以展示编辑历史列表，点击某版本查看当时的页面内容
+- 回滚到历史版本通过 `PUT` 接口重新写入（内容 = 历史快照），形成新版本而非覆盖历史
+
+### Wikilink 自动修正
+
+编辑保存时，后端扫描新增和删除的 `[[wikilinks]]`：
+
+| 变更 | 处理 |
+|------|------|
+| 新增 `[[NewPage]]`，目标不存在 | 提示用户"链接到尚未存在的页面，将自动创建 stub" |
+| 删除 `[[OldPage]]`，无其他页面引用 | OldPage 变为 orphan，下次 lint 报告标记 |
+| 修改 `[[OldName]]` → `[[NewName]]` | 不自动重命名页面（可能其他页面也在引用旧名），lint 标记 |
+
+编辑保存成功后，前端 toast：「页面已保存。新增 2 个 wikilink，其中 1 个目标页面不存在，已自动创建 stub。」
+
+### 编辑并发控制
+
+- 编辑保存使用乐观锁：请求携带 `If-Match: <SHA256 of current page>`
+- 如果页面在用户编辑期间被他人修改，返回 409 Conflict：「页面已被 u_xyz 修改，请刷新后重新编辑」
+- 前端对比差异，帮助用户合并
+
+### 编辑安全
+
+- Markdown 内容经过与摄入相同的 XSS 防护（markdown-it + DOMPurify）
+- 编辑保存同样触发 wikilink 验证（不允许 `[[../../raw/secret]]`）
+- 编辑操作同样写入审计日志，标记 `action = "page_edit"`
 
 ---
 
