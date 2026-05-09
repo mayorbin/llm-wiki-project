@@ -29,6 +29,7 @@ data/
 │   └── {project-id-2}/
 │       └── ...
 ├── audit/                   # 全局审计日志（SQLite）
+├── tasks.db                 # 任务队列持久化（SQLite）
 └── users.db                 # 用户 + 项目成员关系（SQLite）
 ```
 
@@ -558,28 +559,118 @@ class LockManager:
         ...
 ```
 
-### 摄入任务队列
+### 摄入任务队列（持久化）
 
-每个项目维护一个轻量级内存队列：
+每个项目维护一个任务队列，状态持久化到 SQLite，服务重启不丢失。
+
+#### 存储
+
+```sql
+CREATE TABLE task_queue (
+    task_id       TEXT PRIMARY KEY,         -- UUID
+    project_id    TEXT NOT NULL,
+    action        TEXT NOT NULL,            -- "ingest" | "graph_build"
+    file_paths    TEXT NOT NULL,            -- JSON array
+    status        TEXT NOT NULL DEFAULT 'queued',  -- queued | running | completed | failed | rolled_back
+    progress      INTEGER NOT NULL DEFAULT 0,      -- 0-100
+    error_message TEXT,
+    created_by    TEXT NOT NULL,            -- user_id
+    created_at    TEXT NOT NULL,            -- ISO 8601
+    started_at    TEXT,                     -- 开始执行时间
+    completed_at  TEXT,                     -- 完成时间
+    snapshot_dir  TEXT                      -- 快照路径（回滚用）
+);
+
+CREATE INDEX idx_task_project ON task_queue(project_id, status);
+CREATE INDEX idx_task_created ON task_queue(created_at);
+```
+
+#### 生命周期
 
 ```
-ProjectQueue
-├── current_task: Task | None     # 正在执行的任务
-├── pending_tasks: deque[Task]    # 排队等待的任务
-└── max_queue_size: int = 10      # 最大排队数
-
-Task
-├── task_id: str                  # UUID
-├── action: "ingest" | "graph_build"
-├── file_paths: list[str]
-├── status: "queued" | "running" | "completed" | "failed"
-├── progress: int                 # 0-100
-└── created_by: str               # user_id
+文件上传完成
+    │
+    ▼
+创建 Task (status=queued) → 写入 SQLite → 加入内存 ProjectQueue
+    │
+    ▼
+队列调度器取出 Task → status=running → 更新 SQLite → 开始摄入
+    │
+    ├─ 摄入成功 → status=completed + completed_at → 保留 7 天 → 清理
+    │
+    ├─ 摄入失败 → status=failed + error_message → 保留 7 天 → 清理
+    │
+    └─ 用户回滚  → status=rolled_back → 保留到快照过期一同清理
 ```
 
-- 队列中前一个任务完成（或失败）后自动启动下一个
-- 任务完成/失败通过 WebSocket 或轮询通知前端
-- 服务重启后队列清空（内存队列），未完成的任务需手动重新触发
+#### 服务重启恢复
+
+```
+FastAPI startup
+    │
+    ▼
+从 SQLite 加载 status IN ("queued", "running") 的任务
+    │
+    ├─ queued 任务  → 按 created_at 排序加入内存队列
+    │
+    └─ running 任务 → 服务重启时中断，重置为 queued，重新排队
+                      （此时 raw/ 中文件已保存，重新摄入安全）
+```
+
+```python
+async def recover_tasks_on_startup():
+    db = get_db()
+    rows = db.execute(
+        "SELECT * FROM task_queue WHERE status IN ('queued', 'running') ORDER BY created_at"
+    ).fetchall()
+
+    for row in rows:
+        if row["status"] == "running":
+            # 中断的任务重置，等待重新执行
+            db.execute(
+                "UPDATE task_queue SET status='queued', progress=0, started_at=NULL WHERE task_id=?",
+                (row["task_id"],)
+            )
+        project_queue = get_project_queue(row["project_id"])
+        project_queue.enqueue(task_from_row(row))
+
+    db.commit()
+```
+
+#### 状态查询 API
+
+```python
+# GET /api/ingestion/status/{task_id}
+# 优先查内存队列（当前运行状态），回退到 SQLite（历史任务）
+def get_task_status(task_id: str) -> TaskStatus:
+    # 1. 检查内存队列中是否有此任务（当前在排队或运行中）
+    for pq in active_queues.values():
+        if task := pq.find(task_id):
+            return task.to_status()
+
+    # 2. 回退到 SQLite（已完成/失败/已回滚的历史任务）
+    row = db.execute("SELECT * FROM task_queue WHERE task_id = ?", (task_id,)).fetchone()
+    if row:
+        return task_from_row(row).to_status()
+
+    raise TaskNotFound(task_id)
+```
+
+#### 内存 + SQLite 双写原则
+
+- **创建/状态变更 → 先写 SQLite，再更新内存**
+- 内存队列是 SQLite 的缓存视图，不是真实数据源
+- 任意时刻崩溃，SQLite 中状态是准确的
+- 内存队列仅用于快速调度和轮询响应（避免每次查 SQLite）
+
+#### 过期清理
+
+health check 中执行，清理 SQLite 历史记录：
+- `completed` / `failed` → 超过 7 天删除
+- `rolled_back` → 快照过期后一同删除
+- 清理前检查：当前无 queued/running 任务引用同一 project（避免并发冲突）
+
+
 
 ### 文件系统原子写入
 
