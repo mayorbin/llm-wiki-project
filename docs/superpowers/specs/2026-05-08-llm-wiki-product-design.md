@@ -175,6 +175,120 @@ frontend/
 - `DELETE /api/files/{id}` — 删除文件（级联清理 wiki 页）
 - `POST /api/files/move` — 移动文件到其他子目录
 
+#### 文件上传安全
+
+##### 文件类型白名单
+
+```python
+ALLOWED_EXTENSIONS = {
+    ".md", ".pdf", ".docx", ".pptx", ".xlsx", ".xls",
+    ".html", ".htm", ".txt", ".csv", ".json", ".xml",
+    ".rst", ".rtf", ".epub", ".ipynb",
+    ".yaml", ".yml", ".tsv",
+    ".wav", ".mp3",
+}
+
+def validate_extension(filename: str) -> bool:
+    suffix = Path(filename).suffix.lower()
+    # 双重扩展名检测：阻止 attack.pdf.exe 伪装
+    stem = Path(filename).stem
+    if Path(stem).suffix.lower() in ALLOWED_EXTENSIONS:
+        return False
+    if suffix not in ALLOWED_EXTENSIONS:
+        return False
+    # 无扩展名文件拒绝
+    if suffix == "":
+        return False
+    return True
+```
+
+校验点：
+- 仅允许白名单内扩展名，其余一律拒绝
+- 检测双重扩展名（`report.pdf.exe` → 拒绝，stem `report.pdf` 的扩展名在白名单内）
+- 空扩展名拒绝
+- 校验发生在文件保存之前，恶意文件不落盘
+
+##### 文件大小限制
+
+| 文件类型 | 上限 | 理由 |
+|----------|------|------|
+| `.pdf` `.epub` | 100 MB | 学术论文、电子书体积较大 |
+| `.wav` `.mp3` | 200 MB | 音频转录场景 |
+| `.pptx` `.xlsx` `.docx` | 50 MB | Office 文档 |
+| 其他（`.md` `.txt` `.json` 等） | 10 MB | 纯文本不应过大 |
+
+- 前端和后端**双重校验**，前端拦截减少无效上传，后端是安全边界
+- 超过上限返回 413 Payload Too Large
+- 上传过程中流式读取，不将整个文件读入内存
+
+##### 路径穿越防护
+
+```python
+import os
+from pathlib import Path
+
+RAW_BASE = Path("/data/projects/{project_id}/raw").resolve()
+
+def safe_subdir(raw_base: Path, subdir: str) -> Path:
+    """将用户输入的 subdir 规范化为安全的绝对路径，杜绝 ../ 穿越。"""
+    # 1. 移除空路径段和首尾空白
+    cleaned = "/".join(s for s in subdir.strip("/").split("/") if s and s not in (".", ".."))
+    # 2. 拼接后 resolve 消除 ..
+    candidate = (raw_base / cleaned).resolve()
+    # 3. 必须在 raw_base 之下
+    if not str(candidate).startswith(str(raw_base)):
+        raise ValueError(f"路径穿越检测: {subdir}")
+    return candidate
+```
+
+- 所有文件操作（上传/删除/移动/列表）的路径参数都经过此函数规范化
+- 任何 `../` 或 `..\..` 尝试直接抛错 400，不记录、不处理
+- subdir 深度限制为最多 3 层（`论文/2025/12月/`），超过拒绝
+
+##### 文件名规范化
+
+```python
+import unicodedata
+import re
+
+MAX_FILENAME_LENGTH = 200  # 字节（UTF-8 编码后）
+
+def sanitize_filename(filename: str) -> str:
+    # 1. Unicode 规范化：全角→半角，兼容等价→标准形式
+    filename = unicodedata.normalize("NFKC", filename)
+    # 2. 剥离路径分隔符（恶意文件名可能含 / 或 \）
+    filename = filename.replace("/", "_").replace("\\", "_")
+    # 3. 移除不可打印字符（仅保留空格 + 可见字符）
+    filename = re.sub(r"[^\x20-\x7E一-鿿　-〿＀-￯]", "_", filename)
+    # 4. 去首尾空格和点（Windows 不允许尾随点/空格）
+    filename = filename.strip(" .")
+    # 5. 长度截断：保留扩展名，截中间
+    if len(filename.encode("utf-8")) > MAX_FILENAME_LENGTH:
+        stem = Path(filename).stem
+        suffix = Path(filename).suffix
+        # 保留前 60% + 后 30% + 扩展名
+        split = int(MAX_FILENAME_LENGTH * 0.6)
+        stem = stem.encode("utf-8")[:split].decode("utf-8", errors="ignore")
+        filename = stem + "..." + suffix
+    # 6. 空文件名兜底
+    if not filename or filename.startswith("."):
+        filename = f"unnamed_{uuid4().hex[:8]}{Path(filename).suffix}"
+    return filename
+```
+
+##### 上传安全总览
+
+| 风险 | 措施 | 拒绝方式 |
+|------|------|---------|
+| 恶意扩展名 | 白名单 + 双重扩展名检测 | 400 Bad Request |
+| 文件过大 | 前后端双重大小校验 | 413 Payload Too Large |
+| 路径穿越 | `resolve()` + 前缀校验 | 400 Bad Request |
+| 特殊字符文件名 | Unicode 规范化 + 正则过滤 | 静默替换为 `_` |
+| 空文件名/隐藏文件 | 检查空名和 `.` 开头 | 自动生成 `unnamed_xxx` |
+| 文件名过长 | UTF-8 字节截断 | 截断保留扩展名 |
+| 并发上传同一文件 | 目录级锁（见并发安全章节） | 排队等待 |
+| 大文件内存溢出 | 流式写入磁盘（`shutil.copyfileobj`） | — |
+
 #### 摄入
 - `POST /api/ingestion/trigger` — 触发摄入（单文件或批量）
 - `GET /api/ingestion/status/{task_id}` — 摄入进度（5 步分阶段）
