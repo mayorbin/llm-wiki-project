@@ -383,6 +383,94 @@ def sanitize_filename(filename: str) -> str:
 - `POST /api/lint` — 语义质量检查
 - `GET /api/audit-log` — 审计日志查询（支持筛选/分页/导出 CSV）
 
+### 统一分页规范
+
+所有列表类 API 使用统一的分页参数和响应格式。
+
+#### 分页策略
+
+| 场景 | 策略 | 理由 |
+|------|------|------|
+| 文件列表、Wiki 页面树、用户列表 | **offset/limit** | 数据量可控，支持随机跳页 |
+| 审计日志、摄入历史、编辑历史 | **cursor-based + 上一页/下一页** | 数据持续追加，offset 在新数据插入时会导致重复或遗漏 |
+| 导出类接口 | **不分页** | 全量导出 |
+
+#### 请求参数
+
+```typescript
+// offset/limit（默认策略）
+interface PageQuery {
+  offset?: number    // 偏移量，默认 0，最小 0
+  limit?: number     // 每页条数，默认 50，最小 1，最大 200
+  order_by?: string  // 排序字段
+  order_dir?: "asc" | "desc"  // 排序方向，默认 desc
+}
+
+// cursor-based（审计日志等持续追加场景）
+interface CursorQuery {
+  cursor?: string    // 游标（上一页返回的 next_cursor），首页不传
+  direction?: "next" | "prev"  // 翻页方向，默认 next
+  limit?: number     // 每页条数，默认 50，最小 1，最大 200
+}
+```
+
+#### 响应格式
+
+```json
+// offset/limit 响应
+{
+  "data": [...],
+  "pagination": {
+    "strategy": "offset",
+    "offset": 0,
+    "limit": 50,
+    "total": 342,
+    "has_more": true
+  }
+}
+
+// cursor-based 响应
+{
+  "data": [...],
+  "pagination": {
+    "strategy": "cursor",
+    "limit": 50,
+    "has_more": true,
+    "next_cursor": "eyJ0cyI6IjIwMjYtMDUtMDlUMTQ6MzA6MDBaIiwiaWQiOjE1MH0=",
+    "prev_cursor": null
+  }
+}
+```
+
+`next_cursor` 和 `prev_cursor` 是 base64 编码的 opaque 字符串，客户端不应解析其内容。
+
+#### 默认值
+
+| 参数 | 默认值 | 允许范围 |
+|------|--------|---------|
+| `limit` | 50 | 1–200 |
+| `offset` | 0 | ≥0 |
+| `order_dir` | `desc` | asc / desc |
+
+#### 各端点分页策略
+
+| 端点 | 策略 | 默认排序 |
+|------|------|---------|
+| `GET /api/files` | offset | `created_at DESC` |
+| `GET /api/knowledge/pages` | offset | `title ASC` |
+| `GET /api/projects/{id}/members` | offset | `joined_at ASC` |
+| `GET /api/audit-log` | cursor | `timestamp DESC` |
+| `GET /api/ingestion/history` | cursor | `created_at DESC` |
+| `GET /api/knowledge/pages/{path}/history` | cursor | `timestamp DESC` |
+| `GET /api/files/dirs` | 不分页 | —（目录树全量返回） |
+
+#### 前端约定
+
+- 列表页默认每页 50 条
+- 文件列表提供 20/50/100 切换
+- 搜索时重置 offset 到 0
+- cursor-based 的列表显示「上一页」「下一页」按钮，不显示页码
+
 ### Service 层
 
 | Service | 职责 | 依赖引擎 |
