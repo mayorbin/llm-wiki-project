@@ -371,7 +371,7 @@ frontend/
 - `POST /api/files/dirs` — 创建子目录（最多 3 层）
 - `DELETE /api/files/dirs` — 删除空目录
 - `POST /api/files/upload` — 上传文件到指定子目录
-- `POST /api/files/upload-batch` — 批量上传
+- `POST /api/files/upload-batch` — 批量上传（多文件并发上传，每个文件独立 Task）
 - `GET /api/files` — 文件列表（支持 dir/搜索/分页）
 - `DELETE /api/files/{id}` — 删除文件（级联清理 wiki 页）
 - `POST /api/files/move` — 移动文件到其他子目录
@@ -491,7 +491,7 @@ def sanitize_filename(filename: str) -> str:
 | 大文件内存溢出 | 流式写入磁盘（`shutil.copyfileobj`） | — |
 
 #### 摄入
-- `POST /api/ingestion/trigger` — 触发摄入（单文件或批量）
+- `POST /api/ingestion/trigger` — 触发摄入（单文件、多 file_ids 共享上下文、或目录路径）
 - `POST /api/ingestion/retry/{task_id}` — 重试失败的摄入（复用已上传文件）
 - `GET /api/ingestion/status/{task_id}` — 单个摄入进度（5 步分阶段，失败时含 error 详情和建议）
 - `POST /api/ingestion/statuses` — 批量查询摄入进度 `{ "task_ids": ["t1","t2"] }`
@@ -954,6 +954,58 @@ pip install arxiv2markdown
 覆盖操作用户确认：
 - 上传 API 检测到同名文件时，返回 `{"exists": true, "current_hash": "xxx", "last_ingest": "2026-05-09"}`，由前端二次确认
 - 用户确认后才执行覆盖，避免误覆盖
+
+### 批量上传与 auto_ingest
+
+```
+POST /api/files/upload-batch
+  files: [a.pdf, b.pdf, c.pdf]     ← 前端并发上传
+  project_id: xxx
+  subdir: "论文"
+```
+
+当 `auto_ingest_on_upload: true` 时，批量上传的行为：
+
+| 行为 | 决策 | 理由 |
+|------|------|------|
+| Task 粒度 | **每个文件一个独立 Task** | 独立追踪进度、独立重试、独立回滚 |
+| 排队顺序 | 按上传完成顺序排队 | 先上传完成的先摄入，不按文件名排序 |
+| 并发摄入 | 同一项目仅跑 1 个摄入 | 项目写锁保证串行，其余 Task 排队 |
+| 前端反馈 | 每个文件独立显示摄入状态 | 文件列表行内状态标签实时更新 |
+
+```json
+// POST /api/files/upload-batch 响应
+{
+  "uploaded": 3,
+  "failed": 0,
+  "tasks": [
+    {"file_id": "f_1", "filename": "a.pdf", "task_id": "t_01", "status": "queued"},
+    {"file_id": "f_2", "filename": "b.pdf", "task_id": "t_02", "status": "queued"},
+    {"file_id": "f_3", "filename": "c.pdf", "task_id": "t_03", "status": "queued"}
+  ]
+}
+```
+
+#### 批量摄入（共享上下文）
+
+如果用户希望多个文件在 **同一个 LLM 调用中摄入**（LLM 同时看到所有文件，提取跨文件的关联），使用独立端点：
+
+```
+POST /api/ingestion/trigger
+body: {
+  "project_id": "xxx",
+  "file_ids": ["f_1", "f_2", "f_3"]   // 指定多个文件，合并为一次摄入
+}
+```
+
+此时创建一个 `action: "ingest"` 的 Task，`file_paths` 包含多个文件。LLM Prompt 中同时附上所有文件内容，一次提取所有知识并建立跨文件关联。
+
+| 方式 | Task 粒度 | LLM 视角 | 适用场景 |
+|------|----------|---------|---------|
+| 批量上传 + auto_ingest | 每文件 1 个 Task | 每个文件独立摄入 | 文件内容独立（不同主题） |
+| `POST /api/ingestion/trigger` 多 file_ids | 1 个 Task 含多文件 | LLM 同时看到所有文件 | 关联文件（同名文档的中英文版、系列报告） |
+
+两种方式共享同一任务队列和项目写锁，不因粒度不同而有特殊行为。
 
 ### Re-Ingest（文件外部变更检测）
 
