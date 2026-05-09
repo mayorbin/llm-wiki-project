@@ -42,7 +42,7 @@ data/
 | 维度 | 决策 |
 |------|------|
 | 部署 | 内网，前后端分离（Nginx + Python 后端） |
-| LLM | 内部部署 DeepSeek v4 flash 兼容接口，不支持外部代理 |
+| LLM | 内部部署兼容接口（DeepSeek v4 flash / GLM-47 / 其他 OpenAI 兼容模型），不支持外部代理 |
 | 存储 | 文件系统（markdown 文件），需备份恢复方案 |
 | 图谱 | AntV G6 v5 离线自托管，不依赖外网 CDN |
 | 用户 | 团队协作，多用户多项目 |
@@ -106,7 +106,7 @@ backend/
 │   │   └── lock_manager.py       # 并发锁管理
 │   ├── engines/                # 核心引擎层
 │   │   ├── wiki_engine.py      # Wiki 页面 CRUD / wikilinks / index
-│   │   ├── llm_engine.py       # DeepSeek 调用（via litellm）
+│   │   ├── llm_engine.py       # LLM 调用（via litellm，多 provider 支持）
 │   │   ├── graph_engine.py     # NetworkX + Louvain → G6 JSON 输出
 │   │   └── convert_engine.py   # markitdown 多格式转换
 │   ├── models/                 # Pydantic 数据模型
@@ -185,8 +185,10 @@ frontend/
     "archived_at": null
   },
   "llm": {
-    "provider": "deepseek",
-    "model": "deepseek-v4-flash",
+    "provider": "deepseek",        // deepseek | glm | openai_compatible
+    "model": "deepseek-v4-flash",  // 模型标识名（litellm 格式，如 deepseek/deepseek-v4-flash）
+    "api_base": "http://10.0.1.5:8000/v1",  // OpenAI 兼容 API 地址
+    "api_key": null,               // null 表示继承全局配置
     "temperature": 0.3,            // 0.0–2.0，默认 0.3（知识提取需要确定性）
     "max_tokens": 8192,            // 默认 8192，大文件摄入可调大
     "timeout": 120,                // 秒，默认 120
@@ -399,10 +401,79 @@ def sanitize_filename(filename: str) -> str:
 | Engine | 职责 |
 |--------|------|
 | WikiEngine | 页面 CRUD（YAML 前页+markdown）、wikilink 提取/验证、index/log 维护、SHA256，所有写操作加锁 |
-| LLMEngine | litellm→DeepSeek v4 flash、Prompt 模板、JSON 解析、重试+超时 |
+| LLMEngine | litellm 通用 LLM 调用（OpenAI 兼容协议）、Prompt 模板、JSON 解析、重试+超时 |
 | GraphEngine | NetworkX 图构建、Louvain 社区检测、输出 G6 兼容 JSON、SHA256 缓存 |
 | ConvertEngine | 多后端 PDF 转换 + markitdown 通用转换 |
 | LockManager | 项目级 + 文件级读写锁管理，确保并发安全 |
+
+### LLMEngine — 多 Provider 通用设计
+
+LLMEngine 基于 litellm 的统一接口，所有兼容 OpenAI Chat Completions 协议的模型通过配置切换，无需改代码。
+
+#### Provider 配置模板
+
+```yaml
+# DeepSeek v4 flash（默认）
+llm:
+  provider: "openai_compatible"
+  model: "deepseek/deepseek-v4-flash"
+  api_base: "http://your-server:8000/v1"
+  api_key: "sk-xxx"
+
+# GLM-47
+llm:
+  provider: "openai_compatible"
+  model: "glm/glm-47"
+  api_base: "http://your-glm-server:8000/v1"
+  api_key: "sk-xxx"
+  extra_headers:
+    X-Custom-Auth: "optional-header"
+
+# 其他任意 OpenAI 兼容接口（vLLM / Ollama / text-generation-webui）
+llm:
+  provider: "openai_compatible"
+  model: "openai/meta-llama-3.1-70b"  # 任意 litellm 支持的 model id
+  api_base: "http://your-vllm-server:8080/v1"
+  api_key: "not-needed"
+```
+
+#### 切换方式
+
+- **全局切换**：修改 `config.yaml` → 重启服务，所有项目默认使用新模型
+- **单项目覆盖**：在项目设置中覆盖 `llm.model` / `llm.api_base` / `llm.api_key`，仅该项目生效，不重启服务
+- **运行中生效**：项目设置变更即时生效（下次摄入/查询使用新配置），不影响进行中的任务
+
+#### 模型要求
+
+任何用作 Wiki 后端的 LLM 需要满足：
+
+| 能力 | 要求 | 说明 |
+|------|------|------|
+| Chat Completions API | OpenAI 兼容格式 | litellm 统一入口 |
+| 上下文长度 | ≥ 32K tokens | 大文件摄入需要长上下文 |
+| JSON 输出 | 可靠的 JSON 格式遵循 | 摄入 Prompt 要求返回结构化 JSON |
+| 中文支持 | 良好 | Wiki 页面中英文混合 |
+| 推理能力 | 中上 | 需要从文档中准确提取实体、概念和关系 |
+
+#### 健康检查中的模型验证
+
+```python
+# manage.py check 或 health.py 中
+def verify_llm_connection(settings) -> bool:
+    try:
+        response = litellm.completion(
+            model=settings.llm_model,
+            messages=[{"role": "user", "content": "Hello, respond with just 'OK'."}],
+            api_base=settings.llm_api_base,
+            api_key=settings.llm_api_key,
+            max_tokens=5,
+            timeout=10,
+        )
+        return response.choices[0].message.content.strip() == "OK"
+    except Exception as e:
+        logger.error(f"LLM 连接验证失败: {e}")
+        return False
+```
 
 ### ConvertEngine — 多后端文件转换
 
@@ -2131,16 +2202,17 @@ class Settings(BaseSettings):
     # ── 数据目录 ──
     data_dir: str = "./data"        # 所有数据存储根目录
 
-    # ── LLM ──
-    llm_provider: str = "deepseek"
-    llm_model: str = "deepseek-v4-flash"
-    llm_api_base: str = "http://localhost:8000/v1"
+    # ── 默认 LLM（全局默认，项目可覆盖）──
+    llm_provider: str = "openai_compatible"  # deepseek | glm | openai_compatible
+    llm_model: str = "deepseek/deepseek-v4-flash"  # litellm model id
+    llm_api_base: str = "http://localhost:8000/v1"  # OpenAI 兼容 API 地址
     llm_api_key: str = ""           # 必填，无默认值
     llm_temperature: float = 0.3
     llm_max_tokens: int = 8192
     llm_timeout: int = 120          # 秒
     llm_max_retries: int = 3
-    llm_fast_model: str = "deepseek-v4-flash"  # 轻量任务（lint 查询等）使用
+    llm_extra_headers: dict = {}    # 自定义 HTTP 头（如 X-Auth-Token）
+    llm_fast_model: str = ""        # 轻量任务模型，空则复用 llm_model
 
     # ── 服务 ──
     host: str = "127.0.0.1"
@@ -2176,12 +2248,13 @@ log_level: "INFO"
 data_dir: "/data/llm-wiki"
 
 llm:
-  provider: "deepseek"
-  model: "deepseek-v4-flash"
-  api_base: "http://10.0.1.5:8000/v1"
-  api_key: "${LLM_WIKI_LLM_API_KEY}"  # 引用环境变量
+  provider: "openai_compatible"
+  model: "deepseek/deepseek-v4-flash"       # 改为 glm/glm-47 切换 GLM-47
+  api_base: "http://10.0.1.5:8000/v1"      # OpenAI 兼容 API 地址
+  api_key: "${LLM_WIKI_LLM_API_KEY}"       # 引用环境变量
   temperature: 0.3
   max_tokens: 8192
+  extra_headers: {}                         # 自定义 HTTP 头
 
 service:
   host: "0.0.0.0"
@@ -2364,7 +2437,7 @@ python tools/manage.py create-admin --username admin --password <password>
 python tools/manage.py check
 # → [✓] 配置文件有效
 # → [✓] 数据目录可写: /data/llm-wiki
-# → [✓] LLM 连接成功: deepseek-v4-flash @ http://10.0.1.5:8000/v1
+# → [✓] LLM 连接成功: deepseek/deepseek-v4-flash @ http://10.0.1.5:8000/v1
 # → [✓] 数据库初始化完成
 # → [✓] PDF 后端: pymupdf4llm ✓ / marker-pdf ✗ / arxiv2markdown ✗
 
@@ -2433,9 +2506,10 @@ server {
 | 变量 | 必填 | 默认值 | 说明 |
 |------|------|--------|------|
 | `LLM_WIKI_SECRET_KEY` | ✅ | — | JWT 签名密钥，至少 32 字节随机字符串 |
-| `LLM_WIKI_LLM_API_KEY` | ✅ | — | DeepSeek API Key |
-| `LLM_WIKI_LLM_API_BASE` | ❌ | `http://localhost:8000/v1` | LLM 接口地址 |
-| `LLM_WIKI_LLM_MODEL` | ❌ | `deepseek-v4-flash` | 模型名称 |
+| `LLM_WIKI_LLM_API_KEY` | ✅ | — | LLM API Key |
+| `LLM_WIKI_LLM_API_BASE` | ❌ | `http://localhost:8000/v1` | LLM 接口地址（OpenAI 兼容协议） |
+| `LLM_WIKI_LLM_MODEL` | ❌ | `deepseek/deepseek-v4-flash` | litellm model id |
+| `LLM_WIKI_LLM_PROVIDER` | ❌ | `openai_compatible` | 提供商标识（deepseek/glm/openai_compatible） |
 | `LLM_WIKI_DATA_DIR` | ❌ | `./data` | 数据存储根目录 |
 | `LLM_WIKI_PORT` | ❌ | `8000` | 服务监听端口 |
 | `LLM_WIKI_WORKERS` | ❌ | `2` | Gunicorn worker 数 |
@@ -2463,7 +2537,7 @@ server {
 | 图谱渲染 | AntV G6 v5 (离线自托管，MIT 协议) |
 | 后端框架 | FastAPI (Python 3.10+) |
 | 认证 | JWT (python-jose) |
-| LLM 调用 | litellm → DeepSeek v4 flash |
+| LLM 调用 | litellm（OpenAI 兼容协议）→ DeepSeek v4 flash / GLM-47 / 任意兼容模型 |
 | 图计算 | NetworkX + Louvain |
 | 文件转换 | markitdown |
 | 数据库 | SQLite（用户/项目/审计日志） |
