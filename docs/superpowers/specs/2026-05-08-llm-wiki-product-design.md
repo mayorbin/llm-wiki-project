@@ -1040,6 +1040,253 @@ timestamp | action | user_id | username | project_id | target | detail(JSON) | r
 - 随备份导出
 - detail 仅含元信息，不含文件内容
 
+### 审计日志 vs 应用日志 边界
+
+| 维度 | 审计日志 | 应用日志 |
+|------|---------|---------|
+| **记录内容** | 谁在什么时候做了什么 | 系统内部发生了什么 |
+| **受众** | 管理员、合规审查 | 开发者、运维 |
+| **存储** | SQLite + wiki/log.md | 文件系统（JSON Lines） |
+| **不可变性** | 不可删除 | 按 retention 轮转 |
+| **查询方式** | API 查询 + CSV 导出 | tail / grep / jq / 日志聚合 |
+| **包含敏感数据** | 否（仅元信息） | 可能（堆栈、请求体片段） |
+
+---
+
+## 应用日志
+
+所有后端组件使用统一的日志框架，覆盖 LLM 调用、文件操作、摄入流程、异常堆栈等系统运行信息。
+
+### 日志框架
+
+```python
+# app/logging_config.py
+import logging
+import json
+import time
+import sys
+from pathlib import Path
+from logging.handlers import RotatingFileHandler
+
+class StructuredFormatter(logging.Formatter):
+    """JSON Lines 结构化日志，方便 grep / jq / 日志聚合工具解析。"""
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_entry = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S.%f%z"),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+            "module": f"{record.module}:{record.funcName}:{record.lineno}",
+        }
+
+        # 附加上下文字段（通过 logging adapter 或 extra 传入）
+        for key in ("project_id", "user_id", "task_id", "request_id", "duration_ms"):
+            if hasattr(record, key):
+                log_entry[key] = getattr(record, key)
+
+        # 异常信息
+        if record.exc_info and record.exc_info[1]:
+            log_entry["error"] = {
+                "type": type(record.exc_info[1]).__name__,
+                "message": str(record.exc_info[1]),
+            }
+            if record.exc_text:
+                log_entry["error"]["traceback"] = record.exc_text.split("\n")
+
+        return json.dumps(log_entry, ensure_ascii=False, default=str)
+```
+
+### 初始化
+
+```python
+def setup_logging(log_dir: Path, level: str = "INFO"):
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    root = logging.getLogger()
+    root.setLevel(getattr(logging, level.upper()))
+
+    # Handler 1: 结构化 JSON → 文件（按大小轮转）
+    app_handler = RotatingFileHandler(
+        log_dir / "app.log",
+        maxBytes=50 * 1024 * 1024,  # 50 MB
+        backupCount=10,              # 保留 10 个轮转文件
+        encoding="utf-8",
+    )
+    app_handler.setLevel(logging.DEBUG)
+    app_handler.setFormatter(StructuredFormatter())
+    root.addHandler(app_handler)
+
+    # Handler 2: 结构化 JSON → 错误专用文件
+    err_handler = RotatingFileHandler(
+        log_dir / "error.log",
+        maxBytes=20 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
+    err_handler.setLevel(logging.ERROR)
+    err_handler.setFormatter(StructuredFormatter())
+    root.addHandler(err_handler)
+
+    # Handler 3: 可读格式 → stdout（开发环境）
+    if level.upper() == "DEBUG":
+        console = logging.StreamHandler(sys.stdout)
+        console.setLevel(logging.DEBUG)
+        console.setFormatter(logging.Formatter(
+            "%(asctime)s [%(levelname)-5s] %(name)s | %(message)s"
+        ))
+        root.addHandler(console)
+```
+
+### 日志级别约定
+
+| 级别 | 使用场景 | 示例 |
+|------|---------|------|
+| **DEBUG** | 开发调试细节 | SQL 查询语句、LLM prompt 全文、wikilink 扫描中间结果 |
+| **INFO** | 正常业务流程 | 摄入开始/完成、文件上传成功、图谱构建耗时、API 响应码 |
+| **WARNING** | 可恢复的异常 | LLM 重试、文件锁等待、快照清理跳过、内存使用偏高 |
+| **ERROR** | 需要关注的错误 | 摄入失败、LLM API 不可达、磁盘写入失败、JSON 解析失败 |
+| **CRITICAL** | 服务级故障 | 数据库损坏、数据目录不可访问、所有 LLM 后端不可用 |
+
+### 日志覆盖点
+
+#### LLM 调用（LLMEngine）
+
+```python
+logger.info(
+    "LLM 调用开始",
+    extra={
+        "task_id": task_id,
+        "model": "deepseek-v4-flash",
+        "prompt_len": len(prompt),
+        "max_tokens": 8192,
+    },
+)
+
+# ... API 调用 ...
+
+logger.info(
+    "LLM 调用完成",
+    extra={
+        "task_id": task_id,
+        "duration_ms": elapsed_ms,
+        "response_len": len(response),
+        "tokens_used": response.get("usage", {}).get("total_tokens"),
+    },
+)
+
+if elapsed_ms > 30000:
+    logger.warning(
+        f"LLM 调用耗时偏高: {elapsed_ms}ms",
+        extra={"task_id": task_id, "duration_ms": elapsed_ms},
+    )
+
+if retry_count > 0:
+    logger.warning(
+        f"LLM 调用第 {retry_count} 次重试",
+        extra={"task_id": task_id, "retry_count": retry_count, "reason": last_error},
+    )
+```
+
+#### 文件操作（FileService / ConvertEngine）
+
+```python
+logger.info("文件上传", extra={"file": filename, "size_bytes": size, "project_id": project_id})
+logger.info("文件转换开始", extra={"source": src, "format": fmt})
+logger.info("文件转换完成", extra={"duration_ms": ms, "output_size": size})
+logger.error("文件转换失败", exc_info=True, extra={"source": src, "format": fmt})
+```
+
+#### 摄入流程（IngestService）
+
+```python
+logger.info("摄入开始", extra={"task_id": tid, "file": path, "user": uid})
+logger.info("摄入步骤", extra={"task_id": tid, "step": s, "step_name": name})
+logger.info("摄入完成", extra={"task_id": tid, "duration_ms": ms, "pages_created": n})
+logger.error("摄入失败", exc_info=True, extra={"task_id": tid, "failed_step": s, "error_code": code})
+```
+
+#### HTTP 请求（FastAPI Middleware）
+
+```python
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    request_id = str(uuid4())
+    t0 = time.time()
+
+    response = await call_next(request)
+
+    duration_ms = (time.time() - t0) * 1000
+    logger.info(
+        f"{request.method} {request.url.path} → {response.status_code}",
+        extra={
+            "request_id": request_id,
+            "method": request.method,
+            "path": request.url.path,
+            "status": response.status_code,
+            "duration_ms": round(duration_ms, 1),
+            "user_agent": request.headers.get("user-agent", ""),
+        },
+    )
+    response.headers["X-Request-ID"] = request_id
+    return response
+```
+
+#### 并发 / 锁（LockManager）
+
+```python
+logger.debug("获取锁", extra={"scope": scope, "identifier": id_})
+logger.warning("锁等待超时，检测死锁", extra={"lock": str(path), "timeout": t})
+logger.warning("强制释放残留锁", extra={"lock": str(path), "pid": pid, "age": age})
+```
+
+### 日志存储
+
+```
+data/logs/
+├── app.log              # 当前应用日志（JSON Lines，最大 50MB）
+├── app.log.1            # 轮转历史
+├── app.log.2
+│   ...
+├── app.log.10           # 最旧（10 代）
+├── error.log            # 当前错误日志（JSON Lines，最大 20MB）
+├── error.log.1
+│   ...
+└── error.log.5
+```
+
+### 日志查询辅助
+
+提供命令行工具 `tools/logs.py`：
+
+```bash
+# 按级别过滤
+python tools/logs.py --level ERROR
+
+# 按项目过滤
+python tools/logs.py --project proj_123
+
+# 按时间范围过滤
+python tools/logs.py --since "2026-05-09 14:00" --until "2026-05-09 15:00"
+
+# 按 task_id 追踪完整链路
+python tools/logs.py --task-id uuid
+
+# 输出最近 100 条
+python tools/logs.py --tail 100
+
+# 实时跟踪
+python tools/logs.py --follow
+```
+
+### 日志安全
+
+- **不记录完整文件内容**：LLM prompt 中长内容截断为摘要（`prompt_len` 字段），DEBUG 级别才记录全文
+- **不记录 API Key**：通过 litellm 内置的 key masking，环境变量中的 key 不会出现在日志
+- **堆栈信息仅在 ERROR 级别记录**：避免 INFO 日志中泄露内部路径结构
+- **日志文件权限**：0600（仅 owner 可读写）
+- **随备份导出**：备份包中可选包含日志目录
+
 ---
 
 ## 前端设计
