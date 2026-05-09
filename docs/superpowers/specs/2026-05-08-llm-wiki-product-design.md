@@ -534,30 +534,183 @@ LockManager
 
 ### 锁实现
 
+使用 `filelock` 库（跨平台文件锁，基于 `fcntl`/`msvcrt`），无额外中间件依赖。所有锁文件存放在共享目录 `data/.locks/`，Gunicorn 多 worker 和独立进程共享同一套锁。
+
 ```python
-# 使用文件系统锁（fcntl / filelock），无额外中间件依赖
-# 所有锁在进程内有效，跨进程也有效
+from filelock import FileLock, Timeout as LockTimeout
+from pathlib import Path
 
 class LockManager:
     def __init__(self, data_dir: Path):
         self.lock_dir = data_dir / ".locks"
         self.lock_dir.mkdir(exist_ok=True)
 
-    def acquire_project_write(self, project_id: str, timeout: float = 300):
-        """项目级写锁 — 摄入和图谱构建时持有"""
-        ...
+    def _lock_path(self, scope: str, identifier: str) -> Path:
+        # 锁文件路径：data/.locks/{scope}/{identifier}.lock
+        return self.lock_dir / scope / f"{identifier}.lock"
 
-    def acquire_page_lock(self, page_path: Path, mode: str = "rw"):
-        """页面级读写锁"""
-        ...
+    def acquire(self, scope: str, identifier: str,
+                timeout: float = 30, mode: str = "exclusive") -> FileLock:
+        """获取锁，支持超时和死锁恢复。"""
+        lock_path = self._lock_path(scope, identifier)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock = FileLock(str(lock_path), timeout=timeout)
 
-    def acquire_directory_lock(self, dir_path: Path, timeout: float = 5):
-        """目录级写锁 — 移动/删除时持有"""
-        ...
+        try:
+            lock.acquire(timeout=timeout)
+        except LockTimeout:
+            # 死锁检测：检查是不是上一个持有者已经死了
+            if _is_stale_lock(lock_path, timeout_seconds=timeout):
+                _break_stale_lock(lock_path)
+                lock.acquire(timeout=5)  # 短超时重试
+            else:
+                raise LockBusyError(
+                    f"锁 {scope}/{identifier} 被其他进程持有，超时 {timeout}s"
+                ) from None
 
-    def acquire_index_lock(self, project_id: str):
-        """索引文件写锁 — 更新 index/log 时持有"""
-        ...
+        # 记录持有者信息（用于死锁诊断）
+        _write_lock_owner_info(lock_path)
+        return lock
+
+    def release(self, lock: FileLock):
+        lock.release()
+```
+
+#### Gunicorn 多 Worker 与锁的交互
+
+```
+Gunicorn (workers=4)
+│
+├── Worker 1 ────┐
+├── Worker 2 ────┤  所有 worker 共享 data/.locks/ 目录
+├── Worker 3 ────┤  filelock 基于内核级 fcntl，跨进程有效
+├── Worker 4 ────┘
+│
+└── 任何一个 worker 持有锁时，其他 worker 的 acquire() 阻塞等待
+```
+
+关键约束：
+- **锁文件必须在共享文件系统上**。`data/.locks/` 位于项目数据目录，所有 worker 可访问
+- **worker 数量建议**：`workers = CPU 核数`。锁等待时 worker 被阻塞，过多 worker 只会排队空耗资源。建议 2-4 个 worker
+- **多 worker 场景的锁竞争**：摄入操作持有项目写锁期间，该项目的其他写请求在任何 worker 上都会被阻塞，读取操作不受影响（不获取锁）
+- **进程崩溃时的锁释放**：`filelock` 基于内核 `fcntl` 锁，进程退出时内核自动释放。即使 worker 被 SIGKILL 杀死，锁也不会残留
+
+#### 死锁检测与恢复
+
+```python
+# 锁持有信息文件：data/.locks/{scope}/{identifier}.info
+import json, os, time
+
+def _write_lock_owner_info(lock_path: Path):
+    info_path = lock_path.with_suffix(".info")
+    info_path.write_text(json.dumps({
+        "pid": os.getpid(),
+        "worker_id": os.getenv("GUNICORN_WORKER_ID", "unknown"),
+        "acquired_at": time.time(),
+        "hostname": os.uname().nodename,
+    }))
+
+def _is_stale_lock(lock_path: Path, timeout_seconds: float) -> bool:
+    """判断锁是否已被死进程持有。"""
+    info_path = lock_path.with_suffix(".info")
+    if not info_path.exists():
+        return False
+
+    try:
+        info = json.loads(info_path.read_text())
+    except json.JSONDecodeError:
+        return True  # 损坏的 info 文件，视为残留
+
+    pid = info.get("pid", -1)
+    acquired = info.get("acquired_at", 0)
+
+    # 检测 1：进程是否存在
+    try:
+        os.kill(pid, 0)  # 信号 0 不杀进程，仅检查存在性
+        process_alive = True
+    except (OSError, ProcessLookupError):
+        process_alive = False
+
+    # 检测 2：持有时间是否超过超时阈值
+    held_too_long = (time.time() - acquired) > timeout_seconds
+
+    # 进程已死 OR 持有太久 → 判定为残留锁
+    return not process_alive or held_too_long
+
+def _break_stale_lock(lock_path: Path):
+    """强制释放残留锁。"""
+    logger.warning(f"破坏残留锁: {lock_path}")
+    lock_path.unlink(missing_ok=True)
+    lock_path.with_suffix(".info").unlink(missing_ok=True)
+```
+
+#### 死锁场景处理矩阵
+
+| 场景 | 触发条件 | 恢复方式 | 对用户影响 |
+|------|---------|---------|-----------|
+| Worker SIGKILL | 进程被强制杀死 | 内核自动释放 fcntl 锁 | 无影响，锁立即释放 |
+| Worker 进程崩溃 | Python 异常未捕获导致进程退出 | 内核自动释放 fcntl 锁 | 子进程退出时锁释放 |
+| 持有锁的 worker 进入了死循环 | `held_too_long` 超过 timeout | 健康检查清理 + 下一个获取者 break | 锁超时后新请求可获取锁 |
+| Gunicorn 优雅重启 | Master 发 SIGTERM → worker 退出 | 内核自动释放 | 重启完成后自动恢复 |
+| 锁文件残留（磁盘） | 罕见：内核崩溃 / 强制断电 | 健康检查定期清理 .lock / .info | 下次获取锁时清理 |
+
+#### 健康检查：残留锁清理
+
+```python
+# 在 health.py 的 check 中执行
+
+def cleanup_stale_locks(lock_dir: Path, max_age_seconds: float = 3600):
+    """清理残留的锁文件和 info 文件。"""
+    cleaned = 0
+    now = time.time()
+
+    for info_file in lock_dir.rglob("*.info"):
+        try:
+            info = json.loads(info_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            # 损坏文件直接删除
+            info_file.unlink(missing_ok=True)
+            info_file.with_suffix(".lock").unlink(missing_ok=True)
+            cleaned += 1
+            continue
+
+        acquired = info.get("acquired_at", 0)
+        pid = info.get("pid", -1)
+
+        # 检查进程是否存活
+        try:
+            os.kill(pid, 0)
+            process_alive = True
+        except (OSError, ProcessLookupError):
+            process_alive = False
+
+        # 进程已死 OR 持有超过 max_age → 清理
+        if not process_alive or (now - acquired) > max_age_seconds:
+            info_file.unlink(missing_ok=True)
+            lock_file = info_file.with_suffix(".lock")
+            lock_file.unlink(missing_ok=True)
+            cleaned += 1
+            logger.info(f"清理残留锁: {lock_file} (pid={pid}, age={now - acquired:.0f}s)")
+
+    return cleaned
+```
+
+#### 锁目录结构
+
+```
+data/.locks/
+├── project/                  # 项目级写锁
+│   ├── proj-abc.lock
+│   └── proj-abc.info         # 持有者信息
+├── page/                     # Wiki 页面读写锁
+│   ├── sources_attention-paper.lock
+│   └── sources_attention-paper.info
+├── dir/                      # 目录操作锁
+│   ├── 论文_2025.lock
+│   └── 论文_2025.info
+└── index/                    # 索引文件锁
+    ├── proj-abc.lock
+    └── proj-abc.info
 ```
 
 ### 摄入任务队列（持久化）
