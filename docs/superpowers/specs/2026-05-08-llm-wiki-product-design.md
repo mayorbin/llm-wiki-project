@@ -254,17 +254,70 @@ frontend/
 ```json
 // POST /api/auth/login 响应
 {
-  "access_token": "eyJhbGciOi...",     // JWT，有效期 1 小时
+  "access_token": "eyJhbGciOi...",     // JWT，有效期 24 小时
   "refresh_token": "eyJhbGciOi...",    // JWT，有效期 7 天
   "token_type": "bearer",
-  "expires_in": 3600
+  "expires_in": 86400                  // 24h = 86400s
 }
 ```
 
-- `access_token`：短期 JWT，负载 `{ sub: user_id, username, role, iat, exp }`
-- `refresh_token`：长期 JWT，负载 `{ sub: user_id, type: "refresh", iat, exp }`，仅用于刷新
-- refresh 端点接受 `refresh_token` → 返回新的 `access_token` + `refresh_token`（滚动刷新）
-- 刷新时校验 refresh_token 未过期且未列入黑名单（logout 时加入）
+##### Token 过期策略
+
+| Token | 有效期 | 用途 | 过期后行为 |
+|-------|--------|------|-----------|
+| `access_token` | 24 小时 | 所有 API 请求认证 | 前端拦截 401 → 自动用 refresh_token 换取新 access_token |
+| `refresh_token` | 7 天 | 仅用于换取新 access_token | 过期 → 前端跳转登录页，用户需重新登录 |
+
+##### 刷新流程
+
+```
+用户操作 → API 请求携带 access_token
+                │
+        ┌───────┴───────┐
+        │  access_token  │
+        │  未过期         │
+        └───────┬───────┘
+                │
+        ┌───────▼───────┐
+        │  正常返回数据   │
+        └───────────────┘
+
+用户操作 → API 请求携带 access_token
+                │
+        ┌───────┴───────┐
+        │  access_token  │
+        │  已过期 (401)   │
+        └───────┬───────┘
+                │
+        ┌───────▼───────────────────────────┐
+        │  前端拦截器自动调用                  │
+        │  POST /api/auth/refresh            │
+        │  body: { "refresh_token": "..." }  │
+        └───────┬───────────────────────────┘
+                │
+        ┌───────┴───────┐       ┌──────────────┐
+        │  refresh_token  │       │  refresh_token │
+        │  有效           │       │  过期 (401)     │
+        └───────┬───────┘       └──────┬───────┘
+                │                      │
+        ┌───────▼───────┐       ┌──────▼───────┐
+        │  返回新         │       │  清除 Token   │
+        │  access_token  │       │  跳转 /login  │
+        │  + refresh_token│      └──────────────┘
+        └───────┬───────┘
+                │
+        ┌───────▼───────┐
+        │  用新 token    │
+        │  重试原请求     │
+        └───────────────┘
+```
+
+##### Token 负载
+
+- `access_token`：`{ sub: user_id, username, role, exp }`，不包含敏感信息
+- `refresh_token`：`{ sub: user_id, type: "refresh", exp }`，仅用于 `/api/auth/refresh`
+- 两者均使用 HS256 签名，密钥为 `LLM_WIKI_SECRET_KEY`
+- 刷新时校验 refresh_token 未过期且未列入黑名单（logout 时加入内存黑名单，服务重启清空）
 
 ##### GET /api/auth/me 响应
 
