@@ -138,6 +138,7 @@ frontend/
 │   │   ├── wiki/               # PageViewer / QueryInput / QueryResult
 │   │   ├── graph/              # GraphCanvas / FilterPanel / NodeDetail (G6)
 │   │   └── common/             # ConfirmDialog / ProgressBar / EmptyState
+│   ├── lib/                    # markdown-it + DOMPurify 封装 / 工具函数
 │   ├── composables/            # useAuth / useWiki / useGraph
 │   ├── stores/                 # Pinia: auth / files / wiki / graph
 │   └── types/
@@ -770,6 +771,133 @@ G6 内置能力与需求映射：
 
 G6 离线自托管：`npm install @antv/g6` 后 Vite 打包进 dist/static，无 CDN 依赖。
 
+### Markdown 渲染与 XSS 防护
+
+Wiki 页面的内容来源链路：用户上传文件 → markitdown 转换 → LLM 生成 markdown → 前端渲染。每个环节都可能引入恶意内容，前端渲染是最后一道防线。
+
+#### 渲染 Pipeline
+
+```
+后端返回 markdown 字符串
+        │
+        ▼
+    markdown-it 解析为 HTML
+        │
+        ▼
+    DOMPurify 清洗 HTML → v-html 挂载
+```
+
+#### markdown-it 配置
+
+```typescript
+// src/lib/markdown.ts
+import MarkdownIt from 'markdown-it'
+import DOMPurify from 'dompurify'
+
+const md = new MarkdownIt({
+  html: false,          // 禁用 raw HTML 标签
+  linkify: true,        // 自动识别 URL 转为链接
+  breaks: true,         // 换行 → <br>
+  typographer: false,   // 禁用智能引号（中文内容会出问题）
+})
+
+// 白名单：仅允许安全协议
+const ALLOWED_URI_SCHEMES = ['http', 'https', 'mailto']
+
+export function renderMarkdown(raw: string): string {
+  // 1. markdown → HTML
+  const html = md.render(raw)
+
+  // 2. DOMPurify 清洗
+  const clean = DOMPurify.sanitize(html, {
+    ALLOWED_TAGS: [
+      'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
+      'p', 'br', 'hr',
+      'ul', 'ol', 'li',
+      'blockquote', 'pre', 'code',
+      'strong', 'em', 's', 'del', 'ins', 'mark',
+      'a', 'img',
+      'table', 'thead', 'tbody', 'tr', 'th', 'td',
+      'span', 'div',
+    ],
+    ALLOWED_ATTR: [
+      'href', 'target', 'rel',      // <a>
+      'src', 'alt', 'title',        // <img>
+      'class',                       // 代码高亮 class
+      'id',                          // 锚点跳转
+    ],
+    ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto):|[^a-z]|[a-z+.-]+(?:[^a-z+.-:]|$))/i,
+    // 禁止 javascript: data: vbscript: 等危险协议
+  })
+
+  return clean
+}
+```
+
+#### Wikilink 预处理
+
+markdown-it 不识别 `[[PageName]]` 语法，需在解析前将 wikilink 转为安全链接：
+
+```typescript
+function preprocessWikilinks(raw: string, projectId: string): string {
+  // [[PageName]] → [PageName](/wiki/pages/PageName)
+  // [[PageName|显示文本]] → [显示文本](/wiki/pages/PageName)
+  return raw
+    .replace(/\[\[([^\]|]+)\]\]/g, (_, page) => {
+      const slug = page.trim()
+      return `[${slug}](/projects/${projectId}/pages/${encodeURIComponent(slug)})`
+    })
+    .replace(/\[\[([^\]]+)\|([^\]]+)\]\]/g, (_, page, text) => {
+      const slug = page.trim()
+      return `[${text.trim()}](/projects/${projectId}/pages/${encodeURIComponent(slug)})`
+    })
+}
+```
+
+#### 安全层级总览
+
+| 层级 | 措施 | 拦截内容 |
+|------|------|---------|
+| markdown-it | `html: false` | `<script>`、`<iframe>`、`<style>` 等 raw HTML 标签 |
+| Wikilink 预处理 | `encodeURIComponent` | `[[../../etc/passwd]]` 路径穿越 |
+| DOMPurify | 标签/属性白名单 | `onclick`、`onerror`、`onload` 等事件处理器 |
+| DOMPurify | URI 协议白名单 | `javascript:alert(1)` 伪协议 |
+| CSP Header | 后端响应头 | 作为纵深防御，限制 script-src 来源 |
+| 后端存储 | 文件名规范化（见上传安全） | `<img src=​"raw/../../../etc/shadow">` |
+
+#### CSP 响应头（纵深防御）
+
+后端 Nginx 或 FastAPI 中间件追加：
+
+```
+Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;
+```
+
+- `script-src 'self'` — 禁止内联脚本和外部脚本注入
+- `img-src 'self' data:` — 仅允许同源图片和 base64 data URI
+- `style-src 'unsafe-inline'` — 允许内联样式（markdown 渲染的 style 属性不可避免）
+
+#### Vue 组件使用
+
+```vue
+<script setup lang="ts">
+import { computed } from 'vue'
+import { renderMarkdown, preprocessWikilinks } from '@/lib/markdown'
+
+const props = defineProps<{ raw: string; projectId: string }>()
+
+const rendered = computed(() => {
+  const withLinks = preprocessWikilinks(props.raw, props.projectId)
+  return renderMarkdown(withLinks)
+})
+</script>
+
+<template>
+  <!-- DOMPurify 已清洗，直接 v-html 安全 -->
+  <div class="wiki-content" v-html="rendered" />
+</template>
+```
+
 ---
 
 ## 前端请求管理
@@ -985,6 +1113,7 @@ export const filesApi = {
 | 构建工具 | Vite |
 | 状态管理 | Pinia |
 | 请求 | Axios |
+| Markdown 渲染 | markdown-it + DOMPurify |
 | 图谱渲染 | AntV G6 v5 (离线自托管，MIT 协议) |
 | 后端框架 | FastAPI (Python 3.10+) |
 | 认证 | JWT (python-jose) |
