@@ -43,7 +43,7 @@ data/
 | 部署 | 内网，前后端分离（Nginx + Python 后端） |
 | LLM | 内部部署 DeepSeek v4 flash 兼容接口，不支持外部代理 |
 | 存储 | 文件系统（markdown 文件），需备份恢复方案 |
-| 图谱 | vis.js 离线自托管，不依赖外网 CDN |
+| 图谱 | AntV G6 v5 离线自托管，不依赖外网 CDN |
 | 用户 | 团队协作，多用户多项目 |
 | 参考项目 | llm-wiki-agent（仅参考，不修改不依赖） |
 | 开放接口 | API 优先（v1），Skill + MCP 后置 |
@@ -101,11 +101,12 @@ backend/
 │   │   ├── query_service.py
 │   │   ├── graph_service.py
 │   │   ├── lint_service.py
-│   │   └── backup_service.py
+│   │   ├── backup_service.py
+│   │   └── lock_manager.py       # 并发锁管理
 │   ├── engines/                # 核心引擎层
 │   │   ├── wiki_engine.py      # Wiki 页面 CRUD / wikilinks / index
 │   │   ├── llm_engine.py       # DeepSeek 调用（via litellm）
-│   │   ├── graph_engine.py     # NetworkX + Louvain
+│   │   ├── graph_engine.py     # NetworkX + Louvain → G6 JSON 输出
 │   │   └── convert_engine.py   # markitdown 多格式转换
 │   ├── models/                 # Pydantic 数据模型
 │   ├── storage/                # 文件系统操作封装
@@ -126,12 +127,12 @@ frontend/
 │   │   ├── layout/             # AppShell / Sidebar / TopBar
 │   │   ├── files/              # DirTree / FileList / UploadDialog
 │   │   ├── wiki/               # PageViewer / QueryInput / QueryResult
-│   │   ├── graph/              # GraphCanvas / FilterPanel / NodeDetail
+│   │   ├── graph/              # GraphCanvas / FilterPanel / NodeDetail (G6)
 │   │   └── common/             # ConfirmDialog / ProgressBar / EmptyState
 │   ├── composables/            # useApi / useAuth / useWiki / useGraph
 │   ├── stores/                 # Pinia: auth / files / wiki / graph
 │   └── types/
-├── public/static/              # vis.js 离线自托管
+├── public/static/              # AntV G6 离线自托管
 ├── package.json
 ├── vite.config.ts
 └── tsconfig.json
@@ -204,10 +205,11 @@ frontend/
 
 | Engine | 职责 |
 |--------|------|
-| WikiEngine | 页面 CRUD（YAML 前页+markdown）、wikilink 提取/验证、index/log 维护、SHA256 |
+| WikiEngine | 页面 CRUD（YAML 前页+markdown）、wikilink 提取/验证、index/log 维护、SHA256，所有写操作加锁 |
 | LLMEngine | litellm→DeepSeek v4 flash、Prompt 模板、JSON 解析、重试+超时 |
-| GraphEngine | NetworkX 图构建、Louvain 社区检测、vis.js JSON 输出、SHA256 缓存 |
+| GraphEngine | NetworkX 图构建、Louvain 社区检测、输出 G6 兼容 JSON、SHA256 缓存 |
 | ConvertEngine | markitdown 多格式转换（PDF/DOCX/PPTX/HTML 等） |
+| LockManager | 项目级 + 文件级读写锁管理，确保并发安全 |
 
 ---
 
@@ -240,11 +242,116 @@ frontend/
         → 重建图谱
 ```
 
-### 原子性保证
+### 操作原子性
 - 文件保存失败 → 终止，不触发摄入
 - 摄入失败 → wiki 不写入，源文件保留
 - 图谱构建失败 → 保留旧图谱，日志告警
-- 项目级文件锁防并发（fcntl/filelock），同一项目同时只有一个摄入任务
+
+---
+
+## 并发安全设计
+
+多用户同时操作同一项目的文件系统和 Wiki 需要严格的并发控制。
+
+### 锁分层策略
+
+```
+LockManager
+├── 项目级写锁 (per-project write lock)
+│   保护：摄入任务、图谱构建
+│   同一项目同时最多 1 个摄入 + 1 个图谱构建排队
+│
+├── Wiki 页面锁 (per-page lock)
+│   保护：单个 .md 页面的读写
+│   多读并发，写入互斥
+│
+├── 文件操作锁 (per-directory lock)
+│   保护：raw/ 目录下的上传/移动/删除
+│   同一目录并发上传不同文件 → 允许
+│   同一目录移动/删除 → 排队
+│
+└── 索引锁 (index lock)
+    保护：index.md、log.md、overview.md
+    写入互斥，读取不受限
+```
+
+### 并发场景处理
+
+| 场景 | 锁策略 | 行为 |
+|------|--------|------|
+| 多用户同时查询 | 无锁 | 读取 wiki 页面和 index，完全并发 |
+| 用户 A 摄入，用户 B 查询 | A 持有项目写锁，B 无锁读 | B 读取当前快照，A 写入完成后 B 可见新内容 |
+| 用户 A 摄入，用户 B 上传文件 | B 正常上传到 raw/，任务排队 | 返回 task_id，在摄入队列中等待 |
+| 用户 A 摄入，用户 B 触发摄入 | B 返回 409 Conflict | `{"status":"conflict","current_task_id":"xxx","message":"项目正在摄入中"}` |
+| 用户 A 删除文件，用户 B 查看文件 | B 读取时文件已删除 | 返回 404，前端刷新文件列表 |
+| 用户 A 和 B 同时修改同一目录 | A 获锁，B 排队（最多 5s） | B 超时返回 423 Locked |
+| 用户 A 构建图谱，用户 B 查看图谱 | B 读取旧图谱 | 构建完成后自动切换为新图谱 |
+| 用户 A 读 wiki 页面，用户 B 写同一页面 | 页面级读写锁 | A 读完释放锁后 B 写入 |
+
+### 锁实现
+
+```python
+# 使用文件系统锁（fcntl / filelock），无额外中间件依赖
+# 所有锁在进程内有效，跨进程也有效
+
+class LockManager:
+    def __init__(self, data_dir: Path):
+        self.lock_dir = data_dir / ".locks"
+        self.lock_dir.mkdir(exist_ok=True)
+
+    def acquire_project_write(self, project_id: str, timeout: float = 300):
+        """项目级写锁 — 摄入和图谱构建时持有"""
+        ...
+
+    def acquire_page_lock(self, page_path: Path, mode: str = "rw"):
+        """页面级读写锁"""
+        ...
+
+    def acquire_directory_lock(self, dir_path: Path, timeout: float = 5):
+        """目录级写锁 — 移动/删除时持有"""
+        ...
+
+    def acquire_index_lock(self, project_id: str):
+        """索引文件写锁 — 更新 index/log 时持有"""
+        ...
+```
+
+### 摄入任务队列
+
+每个项目维护一个轻量级内存队列：
+
+```
+ProjectQueue
+├── current_task: Task | None     # 正在执行的任务
+├── pending_tasks: deque[Task]    # 排队等待的任务
+└── max_queue_size: int = 10      # 最大排队数
+
+Task
+├── task_id: str                  # UUID
+├── action: "ingest" | "graph_build"
+├── file_paths: list[str]
+├── status: "queued" | "running" | "completed" | "failed"
+├── progress: int                 # 0-100
+└── created_by: str               # user_id
+```
+
+- 队列中前一个任务完成（或失败）后自动启动下一个
+- 任务完成/失败通过 WebSocket 或轮询通知前端
+- 服务重启后队列清空（内存队列），未完成的任务需手动重新触发
+
+### 文件系统原子写入
+
+所有 wiki 页面的写入采用 **临时文件 + 原子重命名** 策略：
+
+```python
+def atomic_write(path: Path, content: str):
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    os.replace(tmp, path)  # 原子操作，不会出现半写文件
+```
+
+- 读者永远读到完整内容（要么旧版本，要么新版本）
+- 写入过程崩溃不会损坏现有文件（.tmp 残留，health check 定期清理）
 
 ---
 
@@ -272,7 +379,7 @@ timestamp | action | user_id | username | project_id | target | detail(JSON) | r
 |------|------|------|
 | `/login` | 登录 | JWT 认证 |
 | `/` | 知识库主页 | 源文件管理 + 查询（Tab 切换） |
-| `/graph` | 知识图谱 | vis.js 交互式图谱 |
+| `/graph` | 知识图谱 | AntV G6 v5 交互式图谱 |
 | `/settings` | 设置 | LLM 配置、备份恢复、审计日志 |
 
 ### 导航结构
@@ -312,6 +419,24 @@ timestamp | action | user_id | username | project_id | target | detail(JSON) | r
 - amber 渐变 Logo + 品牌标语"知识从不丢失"
 - 页面角落极淡 amber 放射渐变（仅大屏可见）
 
+### 知识图谱 (AntV G6 v5)
+
+G6 内置能力与需求映射：
+
+| 需求 | G6 能力 | 配置 |
+|------|---------|------|
+| 节点按类型着色 | 节点样式映射 | `node.style.fill` 按 type 字段映射色值 |
+| 社区分组着色 | Combo 组件 | Louvain 社区 ID → combo 节点，子节点自动嵌套 |
+| 边类型区分 | 边样式映射 | 显式链接（实线 #555）vs LLM 推断（虚线 #FF5722） |
+| 点击节点查看详情 | 内置交互 | `node:click` 事件 → 右侧详情面板 |
+| 筛选面板联动 | 数据过滤 | 前端按类型/社区过滤节点数组 → `graph.changeData()` |
+| 缩放/拖拽 | 内置行为 | `drag-canvas` + `zoom-canvas` 默认启用 |
+| 小地图导航 | Minimap 插件 | `new Minimap({ size: [150, 100] })` |
+| Tooltip 悬停预览 | Tooltip 插件 | `new Tooltip({ getContent: (e) => ... })` |
+| 空图谱 | 自定义状态 | `graph.render()` 前判断节点数为 0 → 显示空状态组件 |
+
+G6 离线自托管：`npm install @antv/g6` 后 Vite 打包进 dist/static，无 CDN 依赖。
+
 ---
 
 ## API 调用流程
@@ -328,7 +453,7 @@ timestamp | action | user_id | username | project_id | target | detail(JSON) | r
    → { step: 3, total: 5, steps: [...], elapsed: 13.1s }
 
 3. 摄入完成后自动重建图谱
-   前端 GET /api/graph/data → 渲染 vis.js
+   前端 GET /api/graph/data → 渲染 AntV G6
 
 4. 用户查询知识库
    POST /api/knowledge/query { question }
@@ -353,7 +478,7 @@ timestamp | action | user_id | username | project_id | target | detail(JSON) | r
 | 构建工具 | Vite |
 | 状态管理 | Pinia |
 | 请求 | Axios |
-| 图谱渲染 | vis.js (离线自托管) |
+| 图谱渲染 | AntV G6 v5 (离线自托管，MIT 协议) |
 | 后端框架 | FastAPI (Python 3.10+) |
 | 认证 | JWT (python-jose) |
 | LLM 调用 | litellm → DeepSeek v4 flash |
