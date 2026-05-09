@@ -401,8 +401,169 @@ def sanitize_filename(filename: str) -> str:
 | WikiEngine | 页面 CRUD（YAML 前页+markdown）、wikilink 提取/验证、index/log 维护、SHA256，所有写操作加锁 |
 | LLMEngine | litellm→DeepSeek v4 flash、Prompt 模板、JSON 解析、重试+超时 |
 | GraphEngine | NetworkX 图构建、Louvain 社区检测、输出 G6 兼容 JSON、SHA256 缓存 |
-| ConvertEngine | markitdown 多格式转换（PDF/DOCX/PPTX/HTML 等） |
+| ConvertEngine | 多后端 PDF 转换 + markitdown 通用转换 |
 | LockManager | 项目级 + 文件级读写锁管理，确保并发安全 |
+
+### ConvertEngine — 多后端文件转换
+
+不同文件类型和排版复杂度需要不同的转换后端。ConvertEngine 按优先级和文件类型自动选择最佳后端，支持 fallback。
+
+#### 后端矩阵
+
+| 后端 | 适用场景 | 输出质量 | 速度 | 安装 | 可选 |
+|------|---------|---------|------|------|------|
+| **markitdown** | 通用 MS Office、HTML、TXT、CSV | 良好 | 快 | `pip install markitdown[all]` | ❌ 必装 |
+| **pymupdf4llm** | 通用 PDF（含中文）| 良好 | 快 | `pip install pymupdf4llm` | ✅ 可选 |
+| **marker-pdf** | 复杂排版 PDF（多栏/表格/公式） | 优秀 | 慢（需 GPU） | `pip install marker-pdf` | ✅ 可选 |
+| **arxiv2markdown** | arXiv 论文专用（LaTeX 源码转换） | 最优（对 arXiv 论文） | 中 | `pip install arxiv2markdown` | ✅ 可选 |
+
+#### 文件类型路由
+
+```
+用户上传文件
+    │
+    ▼
+按扩展名分流
+    │
+    ├─ .md — 跳过转换，直接摄入
+    │
+    ├─ .docx / .pptx / .xlsx / .html / .txt / .csv / .json
+    │      → markitdown（唯一选择，必装）
+    │
+    ├─ .pdf（非 arXiv 来源）
+    │      → 按优先级尝试：
+    │        1. marker-pdf（如果已安装且文件页数 > 20 或有表格/多栏检测）
+    │        2. pymupdf4llm（如果已安装）
+    │        3. markitdown（通用 fallback）
+    │
+    └─ .pdf（arXiv 来源，文件名如 2401.12345.pdf）
+           → 按优先级尝试：
+             1. arxiv2markdown（LaTeX 源码 → Markdown，质量最优）
+             2. marker-pdf（如果已安装）
+             3. pymupdf4llm（如果已安装）
+             4. markitdown（通用 fallback）
+```
+
+#### 后端检测与 Fallback
+
+```python
+class ConvertEngine:
+    def __init__(self):
+        self._backends = self._detect_backends()
+
+    def _detect_backends(self) -> dict:
+        backends = {"markitdown": self._try_import("markitdown", "MarkItDown")}
+
+        for name, module, cls in [
+            ("pymupdf4llm", "pymupdf4llm", None),
+            ("marker", "marker", "convert_single_pdf"),
+            ("arxiv2md", "arxiv2markdown", "Arxiv2Markdown"),
+        ]:
+            try:
+                backends[name] = self._try_import(module, cls)
+            except ImportError:
+                backends[name] = None
+        return backends
+
+    def pdf_convert(self, file_path: Path, source_hint: str = "auto") -> ConvertResult:
+        if source_hint == "arxiv" and self._backends["arxiv2md"]:
+            return self._arxiv_convert(file_path)
+
+        # 复杂排版检测
+        need_high_quality = self._detect_complex_layout(file_path)
+        #   - page_count > 20
+        #   - 包含多栏排版（标记检测）
+        #   - 包含表格（表格线检测）
+        #   - 中文内容占比 > 30% → marker-pdf 对中文更优
+
+        backends_priority = (
+            ["marker", "pymupdf4llm", "markitdown"]
+            if need_high_quality
+            else ["pymupdf4llm", "markitdown"]
+        )
+
+        for backend_name in backends_priority:
+            if self._backends.get(backend_name):
+                result = self._try_convert(backend_name, file_path)
+                if result.success and result.text_length > 0:
+                    return result
+
+        raise ConversionError("所有 PDF 转换后端均失败")
+```
+
+#### 质量评估
+
+转换完成后对输出做质量检查，不达标的输出自动换后端重试：
+
+```python
+def _quality_check(self, text: str, original: Path) -> tuple[bool, str]:
+    # 1. 输出太短（<100 字符且原文件 >1MB）→ 可能转换失败
+    if len(text) < 100 and os.path.getsize(original) > 1024 * 1024:
+        return False, "output_too_short"
+
+    # 2. 乱码检测（高比例不可打印字符）
+    printable_ratio = sum(c.isprintable() or c in "\n\r\t" for c in text) / len(text)
+    if printable_ratio < 0.7:
+        return False, "garbled_output"
+
+    # 3. 中文文档输出无中文字符 → 编码问题
+    if _has_chinese_filename(original) and not _has_chinese_chars(text):
+        return False, "chinese_missing"
+
+    # 4. 全部是图片引用（无实质文本）
+    text_without_images = re.sub(r"!\[.*?\]\(.*?\)", "", text)
+    if len(text_without_images.strip()) < 200:
+        return False, "image_only"
+
+    return True, "ok"
+```
+
+#### 转换 API
+
+转换可单独调用（不上传不摄入），方便用户预览转换结果：
+
+```
+POST /api/convert              # 上传文件 → 返回 Markdown 预览（不保存、不摄入）
+POST /api/convert/preview      # 对比多个后端的转换结果
+```
+
+#### 转换统计
+
+```python
+# GET /api/convert/stats
+{
+  "total_conversions": 1523,
+  "by_backend": {
+    "pymupdf4llm": 823,
+    "markitdown": 450,
+    "marker": 180,
+    "arxiv2markdown": 70
+  },
+  "by_format": { "pdf": 1200, "docx": 200, "pptx": 80, "html": 43 },
+  "fallback_rate": 0.08,      // 8% 的任务触发了 fallback
+  "avg_duration_ms": 3200
+}
+```
+
+#### 安装指引
+
+系统部署时，管理员按需安装可选后端：
+
+```bash
+# 必装
+pip install markitdown[all]
+
+# 推荐安装：通用 PDF（含中文）
+pip install pymupdf4llm
+
+# 按需安装：复杂排版 PDF
+pip install marker-pdf
+
+# 按需安装：arXiv 论文
+pip install arxiv2markdown
+```
+
+前端设置页显示当前已安装的后端和版本：「已安装后端：markitdown ✅ · pymupdf4llm ✅ · marker-pdf ❌ · arxiv2markdown ❌」
 
 ---
 
