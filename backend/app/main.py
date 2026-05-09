@@ -65,6 +65,19 @@ app.add_middleware(
 )
 
 
+# ── 路由注册 ──
+
+from app.api import auth, projects, files, ingestion, knowledge, graph, maintenance
+
+app.include_router(auth.router, prefix="/api", tags=["认证"])
+app.include_router(projects.router, prefix="/api", tags=["项目"])
+app.include_router(files.router, prefix="/api", tags=["文件"])
+app.include_router(ingestion.router, prefix="/api", tags=["摄入"])
+app.include_router(knowledge.router, prefix="/api", tags=["知识"])
+app.include_router(graph.router, prefix="/api", tags=["图谱"])
+app.include_router(maintenance.router, prefix="/api", tags=["维护"])
+
+
 # ── 公共健康检查端点（无需认证） ──
 
 
