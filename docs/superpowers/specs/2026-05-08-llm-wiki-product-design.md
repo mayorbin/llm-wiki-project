@@ -442,6 +442,8 @@ GET /api/auth/me（一次请求）
 - `POST /api/files/upload` — 上传文件到指定子目录
 - `POST /api/files/upload-batch` — 批量上传（多文件并发上传，每个文件独立 Task）
 - `GET /api/files` — 文件列表（支持 dir/搜索/分页）
+- `GET /api/files/{id}` — 文件详情（含关联 wiki 页面列表）
+- `GET /api/files/{id}/download` — 下载源文件
 - `DELETE /api/files/{id}` — 删除文件（级联清理 wiki 页）
 - `POST /api/files/move` — 移动文件到其他子目录
 
