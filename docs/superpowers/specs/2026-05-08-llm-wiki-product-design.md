@@ -3120,6 +3120,70 @@ alembic current
 
 # 生成迁移脚本（模型变更后）
 alembic revision --autogenerate -m "add feature X table"
+
+# ⚠️ 生成迁移后务必人工审查脚本，见下方注意事项
+```
+
+#### SQLite ALTER TABLE 限制
+
+SQLite 仅支持 `ALTER TABLE RENAME` 和 `ALTER TABLE ADD COLUMN`。不支持：
+- 修改列类型
+- 删除列
+- 重命名列（3.25+ 有限支持）
+- 修改列的 NOT NULL / DEFAULT
+
+Alembic `--autogenerate` 在 SQLite 上可能生成不兼容的迁移（例如生成 `ALTER COLUMN` 语句）。
+
+#### 必须的 env.py 配置
+
+```python
+# alembic/env.py
+from alembic import context
+
+def run_migrations_online():
+    connectable = context.config.attributes.get("connection")
+    if connectable is None:
+        connectable = engine_from_config(...)
+
+    with connectable.connect() as connection:
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+
+            # SQLite 兼容：使用"重建表"策略替代 ALTER COLUMN
+            render_as_batch=True,          # ← 关键配置
+        )
+
+        with context.begin_transaction():
+            context.run_migrations()
+```
+
+`render_as_batch=True` 让 Alembic 对不兼容的 ALTER 操作使用 **"创建新表 → 复制数据 → 删除旧表 → 重命名"** 的批量重建策略，自动生成 SQLite 兼容的迁移。
+
+#### 迁移安全 Checklist
+
+每次 `--autogenerate` 后必须：
+
+1. **阅读生成的迁移脚本** — 确认没有 `ALTER COLUMN`/`DROP COLUMN` 直接语句
+2. **检查 `batch_alter_table()` 包裹** — 涉及列变更的操作应在 `with op.batch_alter_table("xxx") as batch_op:` 上下文中
+3. **检查数据迁移** — 如果有 NOT NULL 新增列，确认是否提供了 `server_default`
+4. **生产前在副本上测试** — 对生产数据库的副本执行 `alembic upgrade head`，验证无误
+5. **备份数据库** — 迁移前 `cp data/users.db data/users.db.bak`
+
+#### 示例：安全的列添加
+
+```python
+# alembic/versions/004_add_user_deleted_at.py
+
+def upgrade():
+    with op.batch_alter_table("users") as batch_op:
+        batch_op.add_column(
+            sa.Column("deleted_at", sa.String(), nullable=True)
+        )
+
+def downgrade():
+    with op.batch_alter_table("users") as batch_op:
+        batch_op.drop_column("deleted_at")
 ```
 
 ---
