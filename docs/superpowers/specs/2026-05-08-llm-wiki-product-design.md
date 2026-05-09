@@ -270,26 +270,42 @@ frontend/
 
 ```json
 {
-  "user_id": "u_abc",
-  "username": "zhangsan",
-  "display_name": "张三",
-  "role": "editor",                    // admin | user
+  "user": {
+    "id": "u_abc",
+    "username": "zhangsan",
+    "display_name": "张三",
+    "role": "user",                     // admin | user
+    "is_admin": false
+  },
   "projects": [
     {
-      "project_id": "proj_1",
+      "id": "proj_1",
       "name": "AI 研究知识库",
-      "role": "owner",                 // owner | editor | viewer
-      "status": "active"
+      "role": "owner",                  // owner | editor | viewer
+      "status": "active"                // active | archived
     },
     {
-      "project_id": "proj_2",
+      "id": "proj_2",
       "name": "竞品分析",
       "role": "editor",
       "status": "active"
     }
-  ],
-  "is_admin": false
+  ]
 }
+```
+
+前端初始化流程：
+
+```
+应用启动
+  │
+  ▼
+GET /api/auth/me（一次请求）
+  │
+  ├─ user → 写入 authStore（username / role / isAdmin）
+  ├─ projects → 写入 projectStore（项目列表 + 角色）
+  ├─ 有 projects → 恢复 lastVisitedProject（localStorage）或默认进入第一个
+  └─ 无 projects → 显示空项目引导页
 ```
 
 前端在应用初始化时调用 `GET /api/auth/me` 获取用户上下文，写入 Pinia auth store，作为全局导航、权限判断、项目切换的数据源。
