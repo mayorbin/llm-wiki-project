@@ -88,11 +88,18 @@ class LockManager:
         try:
             lock.acquire(timeout=timeout)
         except FileLockTimeout:
-            # 死锁检测
+            # 死锁检测 + 自动恢复
             if self._is_stale_lock(lock_path):
-                logger.warning(f"检测到残留锁，强制释放: {lock_path}")
+                logger.warning(f"检测到残留锁，尝试强制释放: {lock_path}")
                 self._break_stale_lock(lock_path)
-                lock.acquire(timeout=5)
+                # 重试获取锁（TOCTOU 防护：break 之后其他进程可能抢先）
+                try:
+                    lock.acquire(timeout=3)
+                except FileLockTimeout:
+                    raise LockBusyError(
+                        f"锁 {scope}/{project_id}/{identifier} 残留已清理但重新获取失败，"
+                        f"可能被其他进程抢占"
+                    ) from None
             else:
                 raise LockBusyError(
                     f"锁 {scope}/{project_id}/{identifier} 被其他进程持有，等待 {timeout}s 超时"

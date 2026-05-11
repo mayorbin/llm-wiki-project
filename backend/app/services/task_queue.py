@@ -1,9 +1,10 @@
 # backend/app/services/task_queue.py
-"""摄入任务队列——SQLite 持久化 + 内存调度。"""
+"""摄入任务队列——SQLite 持久化 + 内存调度 + 后台 worker。"""
 import json
 import uuid
 import logging
-from datetime import datetime, timezone
+from pathlib import Path
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 from app.storage.database import get_db
 
@@ -95,7 +96,194 @@ async def recover_tasks_on_startup():
 
 def cleanup_expired(max_age_days: int = 7):
     """清理过期的已完成/失败任务。"""
+    from datetime import timedelta
     db = get_db("tasks")
-    cutoff = datetime.now(timezone.utc).isoformat()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
     db.execute("DELETE FROM task_queue WHERE status IN ('completed','failed') AND completed_at < ?", (cutoff,))
     db.commit()
+
+
+# ── 后台任务 Worker ──
+
+async def start_task_worker(poll_interval: float = 5.0):
+    """
+    后台任务轮询器——在 FastAPI lifespan 中启动。
+
+    每 poll_interval 秒扫描 task_queue 表，将 queued 状态的任务
+    取出并执行摄入/图谱构建操作。
+
+    当前实现为同步轮询（简单可靠）。未来可替换为 Celery/Redis 异步队列。
+    """
+    import asyncio
+
+    logger.info("后台任务 worker 已启动", extra={"poll_interval": poll_interval})
+
+    while True:
+        try:
+            db = get_db("tasks")
+            # 查找所有 queued 状态的任务
+            rows = db.execute(
+                "SELECT * FROM task_queue WHERE status = 'queued' "
+                "ORDER BY created_at ASC LIMIT 10"
+            ).fetchall()
+
+            for row in rows:
+                task = dict(row)
+                task_id = task["task_id"]
+                project_id = task["project_id"]
+                action = task["action"]
+                file_paths = json.loads(task.get("file_paths", "[]"))
+
+                # 尝试获取项目写锁（非阻塞），锁被占用则跳过
+                from app.services.lock_manager import LockManager
+                from app.config import get_settings
+                settings = get_settings()
+                lock_mgr = LockManager(Path(settings.data_dir))
+
+                try:
+                    lock = lock_mgr.acquire_project_write(project_id, timeout=0.1)
+                except Exception:
+                    continue  # 锁被占用，下轮再试
+
+                try:
+                    update_task_status(task_id, "running", progress=10)
+                    logger.info("后台 worker 开始执行任务",
+                        extra={"task_id": task_id, "action": action})
+
+                    if action == "ingest":
+                        _execute_ingest(task_id, project_id, file_paths)
+                    elif action == "graph_build":
+                        _execute_graph_build(task_id, project_id)
+
+                    update_task_status(task_id, "completed", progress=100)
+                    logger.info("后台 worker 任务完成", extra={"task_id": task_id})
+                except Exception as e:
+                    update_task_status(task_id, "failed", progress=0,
+                        error_code="WORKER_ERROR",
+                        error_message=str(e)[:500])
+                    logger.error("后台 worker 任务失败",
+                        extra={"task_id": task_id, "error": str(e)})
+                finally:
+                    lock_mgr.release(lock)
+
+        except Exception as e:
+            logger.error("后台 worker 循环异常", extra={"error": str(e)})
+
+        await asyncio.sleep(poll_interval)
+
+
+def _execute_ingest(task_id: str, project_id: str, file_paths: list[str]):
+    """执行单个摄入任务。"""
+    from app.config import get_settings
+    from app.storage.file_storage import safe_subdir
+    from app.engines.llm_engine import call_llm_with_retry
+
+    settings = get_settings()
+    base_dir = Path(settings.data_dir) / "projects" / project_id
+
+    for fp in file_paths:
+        update_task_status(task_id, "running", progress=30)
+        raw_path = safe_subdir(base_dir / "raw", fp)
+        if not raw_path.exists():
+            raise FileNotFoundError(f"源文件不存在: {fp}")
+
+        # 读取文件内容
+        content = raw_path.read_text(encoding="utf-8") if raw_path.suffix == ".md" else raw_path.read_bytes()[:50*1024]
+        content_str = content if isinstance(content, str) else content.decode("utf-8", errors="replace")
+
+        update_task_status(task_id, "running", progress=50)
+
+        # 调用 LLM 提取知识
+        wiki_dir = base_dir / "wiki"
+        wiki_dir.mkdir(parents=True, exist_ok=True)
+        index_content = (wiki_dir / "index.md").read_text(encoding="utf-8") if (wiki_dir / "index.md").exists() else ""
+
+        prompt = f"""处理以下源文件并提取关键知识构建 Wiki 页面。
+
+文件路径: {fp}
+文件内容:
+{content_str[:10000]}
+
+当前 Wiki 索引:
+{index_content[:2000]}
+
+请以 JSON 格式返回:
+{{
+  "title": "标题",
+  "summary": "2-3句摘要",
+  "key_claims": ["关键观点1", "关键观点2"],
+  "entities": [{{"name":"实体名","type":"person/organization/project"}}],
+  "concepts": [{{"name":"概念名","description":"简述"}}]
+}}"""
+
+        result = call_llm_with_retry(prompt=prompt, task_id=task_id, project_id=project_id, max_tokens=4096)
+        update_task_status(task_id, "running", progress=70)
+
+        # 写入 wiki 页面
+        import json, re
+        try:
+            result = result.strip()
+            if result.startswith("```"):
+                result = result[result.index("\n"):].strip()
+            if result.endswith("```"):
+                result = result[:-3].strip()
+            data = json.loads(result)
+        except json.JSONDecodeError:
+            data = {"title": fp, "summary": result[:500], "key_claims": [], "entities": [], "concepts": []}
+
+        from app.engines.wiki_engine import write_page, update_index, append_log
+        from datetime import datetime, timezone
+
+        slug = re.sub(r'[^a-zA-Z0-9一-鿿_-]', '-', data.get("title", fp)).lower()[:50]
+        now = datetime.now(timezone.utc).isoformat()
+
+        page_content = f"""---
+title: "{data.get('title', fp)}"
+type: source
+tags: []
+date: {now[:10]}
+source_file: {fp}
+---
+
+## 摘要
+{data.get('summary', '')}
+
+## 关键观点
+{chr(10).join('- ' + c for c in data.get('key_claims', []))}
+
+## 实体
+{chr(10).join(f'- [[{e["name"]}]]' for e in data.get('entities', []))}
+
+## 概念
+{chr(10).join(f'- [[{c["name"]}]]: {c.get("description", "")}' for c in data.get('concepts', []))}
+"""
+        write_page(wiki_dir / "sources" / f"{slug}.md", page_content)
+        update_index(wiki_dir, f"- [{data.get('title', fp)}](sources/{slug}.md) — {data.get('summary', '')[:60]}")
+        append_log(wiki_dir, f"## [{now[:10]}] ingest | {data.get('title', fp)}")
+
+        update_task_status(task_id, "running", progress=90)
+
+        # 重建图谱
+        from app.engines.graph_engine import GraphEngine
+        graph_dir = base_dir / "graph"
+        engine = GraphEngine(wiki_dir=wiki_dir, graph_dir=graph_dir)
+        engine.build(run_inference=False)
+
+        update_task_status(task_id, "running", progress=100)
+
+
+def _execute_graph_build(task_id: str, project_id: str):
+    """执行图谱构建任务。"""
+    from app.config import get_settings
+    from app.engines.graph_engine import GraphEngine
+
+    settings = get_settings()
+    base_dir = Path(settings.data_dir) / "projects" / project_id
+    wiki_dir = base_dir / "wiki"
+    graph_dir = base_dir / "graph"
+
+    update_task_status(task_id, "running", progress=50)
+    engine = GraphEngine(wiki_dir=wiki_dir, graph_dir=graph_dir)
+    engine.build(run_inference=False)
+    update_task_status(task_id, "running", progress=100)
+

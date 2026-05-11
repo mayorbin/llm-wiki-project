@@ -297,6 +297,21 @@ def get_audit_log(
     """
     db = get_db("audit")
 
+    # 权限检查：验证用户对请求的项目有访问权限
+    if project_id:
+        users_db = get_db("users")
+        row = users_db.execute(
+            "SELECT 1 FROM project_members WHERE project_id = ? AND user_id = ?",
+            (project_id, user_id),
+        ).fetchone()
+        # 全局管理员可查看任何项目的审计日志
+        admin_row = users_db.execute(
+            "SELECT role FROM users WHERE id = ? AND role = 'admin'",
+            (user_id,),
+        ).fetchone()
+        if not row and not admin_row:
+            raise PermissionError("无权查看该项目的审计日志")
+
     # 构建查询
     conditions = []
     params = []

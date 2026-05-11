@@ -44,7 +44,19 @@ async def lifespan(app: FastAPI):
     from app.services.task_queue import recover_tasks_on_startup
     await recover_tasks_on_startup()
 
+    # 启动后台任务 worker（asyncio task，与 lifespan 生命周期绑定）
+    import asyncio
+    from app.services.task_queue import start_task_worker
+    worker_task = asyncio.create_task(start_task_worker(poll_interval=5.0))
+
     yield  # 应用运行中
+
+    # 关闭时停止 worker
+    worker_task.cancel()
+    try:
+        await worker_task
+    except asyncio.CancelledError:
+        pass
 
     # 关闭时清理（预留）
 
