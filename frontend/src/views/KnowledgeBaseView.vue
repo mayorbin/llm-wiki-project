@@ -36,8 +36,8 @@ async function loadDir() {
       filesApi.getDirTree(projectId, currentDir.value),
       filesApi.listFiles(projectId, currentDir.value),
     ])
-    dirTree.value = dirsRes.data?.dirs || []
-    fileList.value = filesRes.data?.data || filesRes.data || []
+    dirTree.value = dirsRes.data?.directories || []
+    fileList.value = filesRes.data?.files || []
   } catch (e) {
     console.error('加载目录失败:', e)
   } finally {

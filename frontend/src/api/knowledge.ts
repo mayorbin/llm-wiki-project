@@ -1,26 +1,26 @@
 // frontend/src/api/knowledge.ts
+/** 知识 API——查询、页面浏览、编辑 */
 import client from './client'
 
 export const knowledgeApi = {
-  query(projectId: string, question: string, topK = 5) {
-    return client.post('/knowledge/query', { project_id: projectId, question, top_k: topK })
+  /** LLM 综合回答（附 [[wikilinks]] 引用） */
+  query(projectId: string, question: string, model?: string) {
+    return client.post('/knowledge/query', { project_id: projectId, question, model })
   },
-  getPages(projectId: string, offset = 0, limit = 50, search?: string) {
-    return client.get('/knowledge/pages', { params: { project_id: projectId, offset, limit, search } })
+  /** Wiki 页面树（按类型分组） */
+  getPages(projectId: string, type?: string) {
+    return client.get('/knowledge/pages', { params: { project_id: projectId, type } })
   },
-  getPage(projectId: string, pageId: string) {
-    return client.get(`/knowledge/pages/${pageId}`, { params: { project_id: projectId } })
+  /** 读取单个页面 markdown 内容 */
+  getPage(projectId: string, pagePath: string) {
+    return client.get(`/knowledge/pages/${encodeURIComponent(pagePath)}`, { params: { project_id: projectId } })
   },
-  updatePageContent(projectId: string, pageId: string, content: string) {
-    return client.put(`/knowledge/pages/${pageId}`, { project_id: projectId, content })
+  /** 编辑页面内容 */
+  updatePage(projectId: string, pagePath: string, content: string) {
+    return client.put(`/knowledge/pages/${encodeURIComponent(pagePath)}`, { project_id: projectId, content })
   },
-  getPageLinkedPages(projectId: string, pageId: string) {
-    return client.get(`/knowledge/pages/${pageId}/links`, { params: { project_id: projectId } })
-  },
-  searchPages(projectId: string, query: string, limit = 10) {
-    return client.get('/knowledge/search', { params: { project_id: projectId, q: query, limit } })
-  },
-  getIndex(projectId: string) {
-    return client.get('/knowledge/index', { params: { project_id: projectId } })
+  /** 页面编辑历史 */
+  getPageHistory(projectId: string, pagePath: string) {
+    return client.get(`/knowledge/pages/${encodeURIComponent(pagePath)}/history`, { params: { project_id: projectId } })
   },
 }

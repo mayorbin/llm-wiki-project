@@ -29,7 +29,7 @@ async function loadGraph() {
   loading.value = true
   error.value = ''
   try {
-    const res = await graphApi.getGraph(projectId)
+    const res = await graphApi.getData(projectId)
     const data = res.data
     cachedGraphData = data
     renderGraph(data)
@@ -118,7 +118,7 @@ function applyFilter() {
 
 async function handleBuild() {
   try {
-    await graphApi.rebuildGraph(projectId)
+    await graphApi.build(projectId)
     await loadGraph()
   } catch (e) {
     console.error('重建图谱失败:', e)
