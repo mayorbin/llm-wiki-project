@@ -469,8 +469,8 @@ def update_project_settings(project_id: str, user_id: str, settings: dict) -> di
 
     if not role_row:
         raise PermissionError("项目不存在或无权访问")
-    if role_row["role"] not in ("owner", "editor"):
-        raise PermissionError("仅有 owner 或 editor 可以修改项目设置")
+    if role_row["role"] != "owner":
+        raise PermissionError("仅有项目 owner 可以修改项目设置")
 
     # 读取当前设置，合并更新
     row = db.execute(

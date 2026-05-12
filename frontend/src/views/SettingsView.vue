@@ -33,7 +33,7 @@ async function loadSettings() {
 async function saveSettings() {
   loading.value = true
   try {
-    await projectsApi.updateSettings(projectId, settings.value)
+    await projectsApi.updateSettings(projectId, settings.value?.settings || settings.value)
     saved.value = true
     setTimeout(() => saved.value = false, 2000)
   } catch (e) {
@@ -47,7 +47,7 @@ async function loadAuditLog() {
   auditLoading.value = true
   try {
     const res = await maintenanceApi.getAuditLog(projectId, 50)
-    auditLog.value = res.data?.data || []
+    auditLog.value = res.data?.entries || []
   } catch (e) {
     console.error('加载审计日志失败:', e)
   } finally {

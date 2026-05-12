@@ -55,10 +55,31 @@ async def update_user(user_id: str, is_active: bool = None, role: str = None, ad
 async def soft_delete_user(user_id: str, admin: dict = Depends(require_admin)):
     db = get_db("users")
     now = datetime.now(timezone.utc).isoformat()
+
+    # 查找该用户作为唯一 owner 的项目（需自动归档）
+    orphaned = db.execute(
+        """SELECT p.id FROM projects p
+           WHERE p.id IN (SELECT project_id FROM project_members WHERE user_id = ? AND role = 'owner')
+           AND (SELECT COUNT(*) FROM project_members WHERE project_id = p.id AND role = 'owner') = 1""",
+        (user_id,),
+    ).fetchall()
+    orphaned_ids = [r["id"] for r in orphaned]
+
+    # 软删除用户
     db.execute("UPDATE users SET deleted_at = ?, is_active = 0 WHERE id = ?", (now, user_id))
     db.execute("DELETE FROM project_members WHERE user_id = ?", (user_id,))
     db.commit()
-    return {"status": "deleted"}
+
+    # 自动归档无主项目
+    for pid in orphaned_ids:
+        db.execute("UPDATE projects SET status = 'archived', archived_at = ? WHERE id = ?", (now, pid))
+    db.commit()
+
+    return {
+        "status": "deleted",
+        "archived_projects": len(orphaned_ids),
+        "orphaned_project_ids": orphaned_ids,
+    }
 
 
 @router.get("/projects")
