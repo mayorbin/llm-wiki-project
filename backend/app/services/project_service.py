@@ -71,6 +71,14 @@ def create_project(name: str, description: str, owner_id: str) -> dict:
         raise ValueError("项目名称长度为 1-100 字符")
 
     db = get_db("users")
+
+    # 同一用户不能创建同名项目
+    existing = db.execute(
+        "SELECT 1 FROM projects WHERE name = ? AND created_by = ?",
+        (name, owner_id),
+    ).fetchone()
+    if existing:
+        raise ValueError(f"你已有同名项目 \"{name}\"，请使用其他名称")
     project_id = f"p_{uuid.uuid4().hex[:12]}"
     now = _now()
 

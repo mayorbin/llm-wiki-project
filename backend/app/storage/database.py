@@ -72,6 +72,10 @@ def init_db(data_dir: str):
             archived_at TEXT
         );
 
+        -- 同一用户不能创建同名项目
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_project_name_owner
+            ON projects(name, created_by);
+
         CREATE TABLE IF NOT EXISTS project_members (
             project_id  TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
             user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
