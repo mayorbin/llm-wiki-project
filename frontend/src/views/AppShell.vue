@@ -1,10 +1,21 @@
 <script setup lang="ts">
+/**
+ * 应用外壳——浅色侧边栏 + 自定义项目下拉 + SVG 导航。
+ */
+import { ref, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
+const dropdownOpen = ref(false)
+
+const activeProjects = computed(() => (auth.projects || []).filter((p: any) => p.status !== 'archived'))
+const archivedProjects = computed(() => (auth.projects || []).filter((p: any) => p.status === 'archived'))
+const currentProject = computed(() =>
+  auth.projects.find((p: any) => p.id === route.params.projectId)
+)
 
 const navItems = [
   { path: '', label: '知识库', icon: 'book' },
@@ -20,7 +31,14 @@ function isActive(path: string): boolean {
   return cur === full
 }
 
-function goHome() { router.push('/') }
+function switchProject(id: string) {
+  dropdownOpen.value = false
+  router.push(`/${id}`)
+}
+
+function toggleDropdown() { dropdownOpen.value = !dropdownOpen.value }
+function closeDropdown() { dropdownOpen.value = false }
+function goHome() { dropdownOpen.value = false; router.push('/') }
 function logout() { auth.logout(); router.push('/login') }
 </script>
 
@@ -52,15 +70,53 @@ function logout() { auth.logout(); router.push('/login') }
         </div>
 
         <!-- 项目切换 -->
-        <div class="project-switch">
-          <select
-            :value="route.params.projectId"
-            @change="router.push(`/${($event.target as HTMLSelectElement).value}`)"
-          >
-            <option v-for="p in auth.projects" :key="p.id" :value="p.id">
-              {{ p.name }}{{ p.status === 'archived' ? ' [归档]' : '' }}
-            </option>
-          </select>
+        <div class="project-switch" v-click-outside="closeDropdown">
+          <button class="project-trigger" @click="toggleDropdown">
+            <span class="project-trigger-dot" />
+            <span class="project-trigger-name">{{ currentProject?.name || '无项目' }}</span>
+            <svg class="project-trigger-chevron" :class="{ open: dropdownOpen }" viewBox="0 0 20 20" fill="currentColor" width="14">
+              <path d="M6 8l4 4 4-4" stroke="currentColor" stroke-width="2" fill="none"/>
+            </svg>
+          </button>
+
+          <div v-if="dropdownOpen" class="project-dropdown">
+            <div class="dropdown-header">切换项目</div>
+
+            <div v-if="activeProjects.length === 0" class="dropdown-empty">暂无活跃项目</div>
+
+            <button
+              v-for="p in activeProjects" :key="p.id"
+              class="dropdown-item"
+              :class="{ current: p.id === route.params.projectId }"
+              @click="switchProject(p.id)"
+            >
+              <span class="dropdown-item-dot" />
+              <span class="dropdown-item-name">{{ p.name }}</span>
+              <span class="dropdown-item-role">{{ p.role === 'owner' ? 'Owner' : p.role === 'editor' ? 'Editor' : 'Viewer' }}</span>
+            </button>
+
+            <template v-if="archivedProjects.length > 0">
+              <div class="dropdown-divider" />
+              <div class="dropdown-section-title">已归档</div>
+              <button
+                v-for="p in archivedProjects" :key="p.id"
+                class="dropdown-item archived"
+                @click="switchProject(p.id)"
+              >
+                <span class="dropdown-item-dot archived-dot" />
+                <span class="dropdown-item-name">{{ p.name }}</span>
+              </button>
+            </template>
+
+            <div class="dropdown-divider" />
+            <button class="dropdown-item new-project" @click="goHome">
+              <svg viewBox="0 0 20 20" fill="currentColor" width="14"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+              新建项目
+            </button>
+          </div>
+
+          <!-- 点击外部关闭遮罩 -->
+          <div v-if="dropdownOpen" class="dropdown-backdrop" @click="closeDropdown" />
         </div>
 
         <!-- 导航 -->
@@ -129,9 +185,74 @@ function logout() { auth.logout(); router.push('/login') }
 .brand-name { display: block; font-size: 16px; font-weight: 700; color: var(--sidebar-text); letter-spacing: -0.3px; line-height: 1.15; }
 .brand-desc { display: block; font-size: 11px; color: var(--sidebar-muted); }
 
-.project-switch { padding: 12px 14px; border-bottom: 1px solid var(--sidebar-divider); }
-.project-switch select { width: 100%; padding: 8px 10px; font-size: 13px; background: var(--bg-subtle); border-color: transparent; }
-.project-switch select:focus { border-color: var(--accent); background: var(--bg-card); }
+.project-switch { padding: 10px 12px; border-bottom: 1px solid var(--sidebar-divider); position: relative; }
+
+.project-trigger {
+  width: 100%; display: flex; align-items: center; gap: 9px;
+  padding: 8px 10px; background: var(--bg-subtle); border: 1px solid transparent;
+  border-radius: var(--radius); cursor: pointer; transition: all var(--transition);
+}
+.project-trigger:hover { background: var(--bg-card); border-color: var(--border); box-shadow: var(--shadow-xs); }
+
+.project-trigger-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0;
+}
+.project-trigger-name {
+  flex: 1; text-align: left; font-size: 13px; font-weight: 600; color: var(--text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.project-trigger-chevron { color: var(--text-muted); flex-shrink: 0; transition: transform var(--transition); }
+.project-trigger-chevron.open { transform: rotate(180deg); }
+
+/* 下拉面板 */
+.project-dropdown {
+  position: absolute; left: 12px; right: 12px; top: calc(100% + 4px);
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
+  z-index: 100; overflow: hidden; animation: dropIn 0.15s ease;
+}
+
+.dropdown-header {
+  padding: 10px 14px; font-size: 11px; font-weight: 600; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--border-light);
+}
+
+.dropdown-empty { padding: 14px; font-size: 12px; color: var(--text-muted); text-align: center; }
+
+.dropdown-item {
+  width: 100%; display: flex; align-items: center; gap: 9px;
+  padding: 9px 14px; background: transparent; border: none; border-radius: 0;
+  font-size: 13px; color: var(--text-primary); text-align: left;
+  cursor: pointer; transition: background var(--transition);
+}
+.dropdown-item:hover { background: var(--bg-subtle); }
+.dropdown-item.current { background: var(--accent-light); color: var(--accent); font-weight: 600; }
+
+.dropdown-item-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0;
+}
+.dropdown-item.current .dropdown-item-dot { box-shadow: 0 0 0 3px var(--accent-ring); }
+
+.archived-dot { background: var(--text-muted); }
+
+.dropdown-item-name { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dropdown-item-role { font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+
+.dropdown-divider { height: 1px; background: var(--border-light); margin: 2px 0; }
+
+.dropdown-section-title {
+  padding: 6px 14px 4px; font-size: 10px; font-weight: 600; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
+
+.dropdown-item.new-project {
+  color: var(--accent); font-weight: 600; padding: 10px 14px;
+}
+
+.dropdown-backdrop { position: fixed; inset: 0; z-index: 99; }
+
+@keyframes dropIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 
 .nav { padding: 10px 8px; display: flex; flex-direction: column; gap: 1px; }
 
