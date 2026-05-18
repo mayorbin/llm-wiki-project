@@ -216,10 +216,9 @@ h1 { font-size: 30px; font-weight: 750; letter-spacing: -0.8px; margin-bottom: 8
 
 .delete-icon {
   padding: 6px; background: transparent; color: var(--text-muted);
-  border-radius: var(--radius-sm); opacity: 0;
+  border-radius: var(--radius-sm);
   transition: all var(--transition);
 }
-.project-card:hover .delete-icon { opacity: 1; }
 .delete-icon:hover { color: #DC2626; background: var(--error-bg); }
 
 .delete-warning { font-size: 12.5px; color: var(--error-text); margin-top: 8px; }
