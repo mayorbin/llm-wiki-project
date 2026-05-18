@@ -1,4 +1,14 @@
 // frontend/src/router/index.ts
+/**
+ * Vue Router 路由配置。
+ *
+ * 路由结构：
+ *   /login             — 登录页
+ *   /                  — 首页（有项目跳第一个，无项目显示引导）
+ *   /:projectId        — 知识库主页
+ *   /:projectId/graph  — 知识图谱
+ *   /:projectId/settings — 项目设置
+ */
 import { createRouter, createWebHistory } from 'vue-router'
 
 const router = createRouter({
@@ -9,6 +19,12 @@ const router = createRouter({
       name: 'Login',
       component: () => import('@/views/LoginView.vue'),
       meta: { requiresAuth: false },
+    },
+    {
+      path: '/',
+      name: 'Home',
+      component: () => import('@/views/HomeView.vue'),
+      meta: { requiresAuth: true },
     },
     {
       path: '/:projectId',
@@ -32,22 +48,52 @@ const router = createRouter({
         },
       ],
     },
-    { path: '/', redirect: '/default' },
     { path: '/:pathMatch(.*)*', redirect: '/' },
   ],
 })
 
-// 导航守卫——未登录跳 /login
+// 导航守卫——未登录跳 /login，已登录无项目则留在首页
 router.beforeEach(async (to) => {
   if (to.path === '/login') return true
+
   const { useAuthStore } = await import('@/stores/auth')
   const auth = useAuthStore()
+
   if (!auth.isAuthenticated) {
     await auth.initialize()
   }
+
   if (!auth.isAuthenticated && to.meta.requiresAuth !== false) {
     return { name: 'Login', query: { redirect: to.fullPath } }
   }
+
+  // 已登录且访问根路径：有项目则跳转第一个项目
+  if (to.path === '/' && auth.isAuthenticated) {
+    const lastProject = localStorage.getItem('last_project')
+    const projects = auth.projects || []
+
+    // 优先跳转上次访问的项目（需仍在用户项目列表中）
+    if (lastProject && projects.some((p: any) => p.id === lastProject)) {
+      return `/${lastProject}`
+    }
+    // 否则跳转第一个项目
+    if (projects.length > 0) {
+      return `/${projects[0].id}`
+    }
+    // 无项目则留在首页（显示引导创建页面）
+  }
+
+  // 检查目标 projectId 是否有效
+  const targetProjectId = to.params.projectId as string | undefined
+  if (targetProjectId && auth.isAuthenticated) {
+    const projects = auth.projects || []
+    // 排除 default 和无效 ID
+    if (targetProjectId === 'default' || !projects.some((p: any) => p.id === targetProjectId)) {
+      // 无效项目 ID → 回到首页
+      return '/'
+    }
+  }
+
   return true
 })
 
