@@ -2,18 +2,19 @@
 /**
  * 知识库主页——文件管理器 + 知识查询。
  */
-import { ref, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { filesApi } from '@/api/files'
 import { knowledgeApi } from '@/api/knowledge'
 import { renderMarkdown } from '@/lib/markdown'
+import DirTreeNode from '@/components/DirTreeNode.vue'
 
 const route = useRoute()
 const projectId = route.params.projectId as string
 
 const activeTab = ref<'files' | 'query'>('files')
 const currentDir = ref('')
-const dirTree = ref<string[]>([])
+const dirTree = ref<any[]>([])
 const fileList = ref<any[]>([])
 const loading = ref(false)
 const queryText = ref('')
@@ -23,6 +24,10 @@ const deleteTarget = ref<any>(null)
 const showDeleteConfirm = ref(false)
 const uploading = ref(false)
 const dragOver = ref(false)
+
+const rootDirs = computed(() =>
+  dirTree.value.filter((n: any) => n.type === 'directory')
+)
 
 async function loadDir() {
   loading.value = true
@@ -130,16 +135,16 @@ watch(currentDir, loadDir)
       </div>
 
       <div class="fm-body">
-        <nav class="fm-sidebar" v-if="dirTree.length > 0">
+        <nav class="fm-sidebar" v-if="rootDirs.length > 0">
           <div class="fm-sidebar-label">目录</div>
-          <div
-            v-for="d in dirTree" :key="d"
-            class="fm-sidebar-item" :class="{ active: currentDir === d }"
-            @click="currentDir = d"
-          >
-            <svg viewBox="0 0 20 20" fill="currentColor" width="14"><path d="M2 5a2 2 0 012-2h3.6c.4 0 .8.2 1 .5L10 5h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V5z"/></svg>
-            {{ d }}
-          </div>
+          <DirTreeNode
+            v-for="node in rootDirs"
+            :key="node.path"
+            :node="node"
+            :depth="0"
+            :currentDir="currentDir"
+            @select="(path: string) => currentDir = path"
+          />
         </nav>
 
         <div class="fm-main" :class="{ drag: dragOver }" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop">
@@ -221,14 +226,6 @@ watch(currentDir, loadDir)
 
 .fm-sidebar { width: 180px; border-right: 1px solid var(--border-light); padding: 14px 0; flex-shrink: 0; }
 .fm-sidebar-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; padding: 0 14px 8px; }
-.fm-sidebar-item {
-  display: flex; align-items: center; gap: 7px; padding: 7px 14px;
-  font-size: 13px; color: var(--text-secondary); cursor: pointer; transition: all var(--transition);
-}
-.fm-sidebar-item:hover { background: var(--bg-subtle); color: var(--text-primary); }
-.fm-sidebar-item.active { background: var(--accent-light); color: var(--accent); font-weight: 600; }
-.fm-sidebar-item svg { color: var(--text-muted); flex-shrink: 0; }
-.fm-sidebar-item.active svg { color: var(--accent); }
 
 .fm-main { flex: 1; padding: 0; min-width: 0; transition: border-color var(--transition); }
 .fm-main.drag { background: var(--accent-light); }
