@@ -27,8 +27,8 @@ export const filesApi = {
   downloadFile(fileId: string) {
     return client.get(`/files/${fileId}/download`, { responseType: 'blob' })
   },
-  deleteFile(fileId: string, projectId: string) {
-    return client.delete(`/files/${fileId}`, { data: { project_id: projectId } })
+  deleteFile(filePath: string, projectId: string) {
+    return client.delete(`/files/${encodeURIComponent(filePath)}`, { params: { project_id: projectId } })
   },
   moveFile(fileId: string, projectId: string, targetSubdir: string) {
     return client.post('/files/move', { file_id: fileId, project_id: projectId, target_subdir: targetSubdir })

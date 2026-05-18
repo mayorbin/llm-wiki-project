@@ -63,7 +63,7 @@ async function handleUpload(e: Event) {
 function confirmDelete(file: any) { deleteTarget.value = file; showDeleteConfirm.value = true }
 async function executeDelete() {
   if (!deleteTarget.value) return
-  try { await filesApi.deleteFile(deleteTarget.value.id || deleteTarget.value.file_id, projectId) } catch (e) { console.error(e) }
+  try { await filesApi.deleteFile(deleteTarget.value.path, projectId) } catch (e) { console.error(e) }
   showDeleteConfirm.value = false; deleteTarget.value = null; loadDir()
 }
 
