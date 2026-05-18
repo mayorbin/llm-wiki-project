@@ -37,11 +37,11 @@ async function loadAuditLog() {
   auditError.value = ''
   try {
     // Promise.race：无论成功/失败/超时，5 秒内必定结束
-    const result = await Promise.race([
+    const result: any = await Promise.race([
       maintenanceApi.getAuditLog(projectId, 50),
       new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 5000)),
     ])
-    auditLog.value = result.data?.entries || []
+    auditLog.value = result?.data?.entries || []
   } catch (e: any) {
     if (e?.message === 'TIMEOUT') {
       auditError.value = '请求超时'
