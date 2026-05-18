@@ -82,7 +82,7 @@ onMounted(() => { loadSettings(); loadAuditLog() })
 
 <template>
   <div class="settings-page">
-    <h2>项目设置 <span style="font-size:14px;background:#D97706;color:#fff;padding:2px 8px;border-radius:4px">BUILD-OK-2026</span></h2>
+    <h2>项目设置</h2>
 
     <div class="card" style="margin-bottom:18px" v-if="settings">
       <h3 class="card-title">LLM 参数</h3>
