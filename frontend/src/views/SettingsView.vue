@@ -14,8 +14,7 @@ const settings = ref<any>(null)
 const loading = ref(false)
 const saved = ref(false)
 const auditLog = ref<any[]>([])
-const auditLoading = ref(false)
-const auditLoaded = ref(false)
+const auditStatus = ref<'idle' | 'loading' | 'loaded' | 'error'>('idle')
 const auditError = ref('')
 const showImport = ref(false)
 
@@ -24,36 +23,28 @@ async function loadSettings() {
   try {
     const res = await projectsApi.getSettings(projectId)
     settings.value = res.data?.settings || { llm: {}, features: {} }
-  } catch (e) { console.error(e) } finally { loading.value = false }
+  } catch { /* ignore */ }
+  finally { loading.value = false }
 }
 
 async function saveSettings() {
   loading.value = true
   try { await projectsApi.updateSettings(projectId, settings.value); saved.value = true; setTimeout(() => saved.value = false, 2000) }
-  catch (e) { console.error(e) } finally { loading.value = false }
+  catch { /* ignore */ }
+  finally { loading.value = false }
 }
 
 async function loadAuditLog() {
-  if (auditLoading.value) return  // 防止重复请求
-  auditLoading.value = true
+  auditStatus.value = 'loading'
   auditError.value = ''
   try {
-    // Promise.race：无论成功/失败/超时，5 秒内必定结束
-    const result: any = await Promise.race([
-      maintenanceApi.getAuditLog(projectId, 50),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 5000)),
-    ])
-    auditLog.value = result?.data?.entries || []
+    const res = await maintenanceApi.getAuditLog(projectId, 50)
+    auditLog.value = res.data?.entries || []
+    auditStatus.value = 'loaded'
   } catch (e: any) {
-    if (e?.message === 'TIMEOUT') {
-      auditError.value = '请求超时'
-    } else if (e?.code !== 'ERR_CANCELED') {
-      auditError.value = e?.response?.status === 403 ? '无权限查看操作记录' : '加载失败'
-    }
+    auditStatus.value = 'error'
+    auditError.value = e?.response?.status === 403 ? '无权限查看操作记录' : '加载失败'
     auditLog.value = []
-  } finally {
-    auditLoading.value = false
-    auditLoaded.value = true
   }
 }
 
@@ -63,7 +54,7 @@ async function handleExport() {
     const url = window.URL.createObjectURL(new Blob([res.data]))
     const a = document.createElement('a'); a.href = url; a.download = `backup-${projectId}-${Date.now()}.tar.gz`; a.click()
     window.URL.revokeObjectURL(url)
-  } catch (e) { console.error(e) }
+  } catch { /* ignore */ }
 }
 
 onMounted(() => { loadSettings(); loadAuditLog() })
@@ -73,7 +64,6 @@ onMounted(() => { loadSettings(); loadAuditLog() })
   <div class="settings-page">
     <h2>项目设置</h2>
 
-    <!-- LLM 配置 -->
     <div class="card" style="margin-bottom:18px" v-if="settings">
       <h3 class="card-title">LLM 参数</h3>
       <p class="card-desc">为该知识库覆盖全局 LLM 配置。留空则使用系统默认值。</p>
@@ -97,7 +87,6 @@ onMounted(() => { loadSettings(); loadAuditLog() })
       </div>
     </div>
 
-    <!-- 功能开关 -->
     <div class="card" style="margin-bottom:18px" v-if="settings">
       <h3 class="card-title">功能</h3>
       <div class="toggle-list">
@@ -124,7 +113,6 @@ onMounted(() => { loadSettings(); loadAuditLog() })
       </div>
     </div>
 
-    <!-- 备份 -->
     <div class="card" style="margin-bottom:18px">
       <h3 class="card-title">备份与恢复</h3>
       <p class="card-desc">导出项目数据（Wiki 页面 + 源文件 + 图谱）为 tar.gz 压缩包。恢复将覆盖当前数据。</p>
@@ -140,22 +128,25 @@ onMounted(() => { loadSettings(); loadAuditLog() })
       </div>
     </div>
 
-    <!-- 审计日志 -->
     <div class="card">
       <h3 class="card-title">操作记录</h3>
 
-      <div v-if="auditLoading" style="color:var(--text-muted);font-size:13px;padding:12px 0">加载中...</div>
-      <div v-else-if="auditError" style="color:var(--error-text);font-size:13px;padding:12px 0">
-        {{ auditError }}
-        <button class="btn-ghost" style="font-size:12px;margin-left:8px;padding:2px 8px" @click="loadAuditLog()">重试</button>
+      <div v-if="auditStatus === 'loading'" style="color:var(--text-muted);font-size:13px;padding:12px 0">加载中...</div>
+
+      <div v-else-if="auditStatus === 'error'" style="padding:12px 0">
+        <span style="color:var(--error-text);font-size:13px">{{ auditError }}</span>
+        <button class="btn-ghost" style="font-size:12px;margin-left:8px;padding:2px 8px" @click="loadAuditLog">重试</button>
       </div>
-      <div v-else-if="!auditLoaded || auditLog.length === 0" style="padding:12px 0">
-        <template v-if="!auditLoaded">
-          <button class="btn-ghost" style="font-size:12px;padding:4px 12px" @click="loadAuditLog()">加载操作记录</button>
-        </template>
-        <span v-else style="color:var(--text-muted);font-size:13px">暂无操作记录</span>
+
+      <div v-else-if="auditStatus === 'loaded' && auditLog.length === 0" style="color:var(--text-muted);font-size:13px;padding:12px 0">
+        暂无操作记录
       </div>
-      <table v-else>
+
+      <div v-else-if="auditStatus === 'idle'" style="padding:12px 0">
+        <button class="btn-ghost" style="font-size:12px;padding:4px 12px" @click="loadAuditLog">加载操作记录</button>
+      </div>
+
+      <table v-else-if="auditLog.length > 0">
         <thead><tr><th>时间</th><th>操作</th><th>用户</th><th>目标</th></tr></thead>
         <tbody>
           <tr v-for="log in auditLog.slice(0, 30)" :key="log.id">
@@ -168,7 +159,6 @@ onMounted(() => { loadSettings(); loadAuditLog() })
       </table>
     </div>
 
-    <!-- 保存 -->
     <div class="save-bar">
       <button class="btn-primary" :disabled="loading" @click="saveSettings">
         <template v-if="saved">&#10003; 已保存</template>
@@ -187,6 +177,7 @@ h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; margin-bottom: 2
 .card-desc { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; }
 
 .fields-row { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 12px; }
+
 .field { display: flex; flex-direction: column; }
 .field label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 4px; }
 .field input { font-size: 13px; padding: 9px 12px; }
@@ -200,14 +191,17 @@ h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; margin-bottom: 2
 .toggle-row:last-child { border-bottom: none; }
 
 .toggle-switch { position: relative; width: 40px; height: 22px; flex-shrink: 0; }
-.toggle-switch input { position: absolute; opacity: 0; width: 100%; height: 100%; cursor: pointer; z-index: 1; }
+.toggle-switch input {
+  position: absolute; opacity: 0; width: 100%; height: 100%; cursor: pointer; z-index: 1;
+}
 .toggle-track {
-  display: block; width: 100%; height: 100%; border-radius: 100px; background: var(--border-strong);
-  transition: background var(--transition); position: relative;
+  display: block; width: 100%; height: 100%; border-radius: 100px;
+  background: var(--border-strong); transition: background var(--transition); position: relative;
 }
 .toggle-track::after {
   content: ''; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
-  border-radius: 50%; background: #fff; transition: transform var(--transition); box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+  border-radius: 50%; background: #fff; transition: transform var(--transition);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.15);
 }
 .toggle-switch input:checked + .toggle-track { background: var(--accent); }
 .toggle-switch input:checked + .toggle-track::after { transform: translateX(18px); }
@@ -219,7 +213,10 @@ h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; margin-bottom: 2
 
 table { font-size: 13px; }
 .time-col { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
-.target-col { color: var(--text-secondary); font-size: 12px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.target-col {
+  color: var(--text-secondary); font-size: 12px; max-width: 240px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 .save-bar { margin-top: 24px; }
 </style>
