@@ -213,11 +213,7 @@ async function executeDelete() {
     </div>
 
     <main class="main">
-      <router-view v-slot="{ Component }">
-        <transition name="page" mode="out-in">
-          <component :is="Component" :key="route.fullPath" />
-        </transition>
-      </router-view>
+      <router-view :key="route.fullPath" />
     </main>
   </div>
 </template>

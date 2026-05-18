@@ -20,8 +20,10 @@ const showImport = ref(false)
 
 async function loadSettings() {
   loading.value = true
-  try { const res = await projectsApi.getSettings(projectId); settings.value = res.data?.settings || { llm: {}, features: {} } }
-  catch (e) { console.error(e) } finally { loading.value = false }
+  try {
+    const res = await projectsApi.getSettings(projectId)
+    settings.value = res.data?.settings || { llm: {}, features: {} }
+  } catch (e) { console.error(e) } finally { loading.value = false }
 }
 
 async function saveSettings() {
@@ -33,22 +35,21 @@ async function saveSettings() {
 async function loadAuditLog() {
   auditLoading.value = true
   auditError.value = ''
-  // 兜底：5 秒后无论如何结束 loading 状态
-  const fallback = setTimeout(() => {
-    if (auditLoading.value) {
-      auditLoading.value = false
-      auditError.value = '请求超时'
-    }
-  }, 5000)
   try {
-    const res = await maintenanceApi.getAuditLog(projectId, 50)
-    auditLog.value = res.data?.entries || []
+    // Promise.race：无论成功/失败/超时，5 秒内必定结束
+    const result = await Promise.race([
+      maintenanceApi.getAuditLog(projectId, 50),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('TIMEOUT')), 5000)),
+    ])
+    auditLog.value = result.data?.entries || []
   } catch (e: any) {
-    if (e?.code !== 'ERR_CANCELED') {
-      auditError.value = e.response?.status === 403 ? '无权限查看操作记录' : '加载失败'
+    if (e?.message === 'TIMEOUT') {
+      auditError.value = '请求超时'
+    } else if (e?.code !== 'ERR_CANCELED') {
+      auditError.value = e?.response?.status === 403 ? '无权限查看操作记录' : '加载失败'
     }
+    auditLog.value = []
   } finally {
-    clearTimeout(fallback)
     auditLoading.value = false
   }
 }
