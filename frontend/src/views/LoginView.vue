@@ -90,9 +90,9 @@ async function handleLogin() {
 label { display: block; font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 4px; margin-top: 12px; }
 label:first-of-type { margin-top: 0; }
 
-input { margin-bottom: 4px; padding: 11px 14px; }
+input { margin-bottom: 12px; padding: 11px 14px; }
 
-.login-btn { width: 100%; padding: 11px; margin-top: 20px; }
+.login-btn { width: 100%; padding: 11px 14px; margin-top: 8px; border-radius: var(--radius); }
 .login-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
 
 .error-msg { background: var(--error-bg); color: var(--error-text); padding: 10px 14px; border-radius: var(--radius); font-size: 13px; margin-bottom: 8px; }
