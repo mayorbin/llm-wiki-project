@@ -127,18 +127,17 @@ watch(currentDir, loadDir)
         </div>
       </div>
 
-      <div class="files-card" :class="{ drag: dragOver }" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop">
-        <!-- dir tree -->
-        <nav class="dir-nav" v-if="dirTree.length > 0">
-          <div class="dir-nav-title">目录</div>
-          <div
-            v-for="d in dirTree" :key="d"
-            class="dir-nav-item" :class="{ active: currentDir === d }"
-            @click="currentDir = d"
-          >{{ d }}</div>
-        </nav>
+      <!-- 目录标签 -->
+      <div class="dir-tags" v-if="dirTree.length > 0">
+        <span class="dir-tags-label">目录：</span>
+        <button
+          v-for="d in dirTree" :key="d"
+          class="dir-tag" :class="{ active: currentDir === d }"
+          @click="currentDir = d"
+        >{{ d }}</button>
+      </div>
 
-        <!-- file list -->
+      <div class="files-card" :class="{ drag: dragOver }" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop">
         <div class="file-area">
           <div v-if="fileList.length === 0 && !loading" class="empty-state">
             <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.25">
@@ -216,16 +215,16 @@ watch(currentDir, loadDir)
 .bread-sep { color: var(--text-muted); font-size: 12px; }
 .upload-label { cursor: pointer; }
 
-.files-card { display: flex; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-xs); overflow: hidden; min-height: 340px; transition: border-color var(--transition); }
+.dir-tags { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+.dir-tags-label { font-size: 12px; color: var(--text-muted); font-weight: 500; }
+.dir-tag { padding: 4px 12px; border-radius: 100px; font-size: 12px; font-weight: 500; background: var(--bg-subtle); color: var(--text-secondary); border: 1px solid transparent; transition: all var(--transition); }
+.dir-tag:hover { background: var(--bg-card); border-color: var(--border); color: var(--text-primary); }
+.dir-tag.active { background: var(--accent-light); color: var(--accent); font-weight: 600; border-color: transparent; }
+
+.files-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-xs); overflow: hidden; min-height: 340px; transition: border-color var(--transition); }
 .files-card.drag { border-color: var(--accent); border-style: dashed; }
 
-.dir-nav { width: 180px; border-right: 1px solid var(--border-light); padding: 16px; flex-shrink: 0; }
-.dir-nav-title { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
-.dir-nav-item { padding: 6px 10px; border-radius: var(--radius-sm); font-size: 13px; color: var(--text-secondary); cursor: pointer; transition: all var(--transition); }
-.dir-nav-item:hover { background: var(--bg-subtle); color: var(--text-primary); }
-.dir-nav-item.active { background: var(--accent-light); color: var(--accent); font-weight: 600; }
-
-.file-area { flex: 1; padding: 16px 20px; min-width: 0; }
+.file-area { padding: 16px 20px; min-width: 0; }
 
 .file-cell { display: flex; align-items: center; gap: 10px; }
 .file-icon {
