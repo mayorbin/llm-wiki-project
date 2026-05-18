@@ -63,6 +63,11 @@ router.beforeEach(async (to) => {
     await auth.initialize()
   }
 
+  // F5刷新后 token 有效但 projects 未加载——需重新拉取
+  if (auth.isAuthenticated && (!auth.projects || auth.projects.length === 0)) {
+    await auth.initialize()
+  }
+
   if (!auth.isAuthenticated && to.meta.requiresAuth !== false) {
     return { name: 'Login', query: { redirect: to.fullPath } }
   }
@@ -72,15 +77,12 @@ router.beforeEach(async (to) => {
     const lastProject = localStorage.getItem('last_project')
     const projects = auth.projects || []
 
-    // 优先跳转上次访问的项目（需仍在用户项目列表中）
     if (lastProject && projects.some((p: any) => p.id === lastProject)) {
       return `/${lastProject}`
     }
-    // 否则跳转第一个项目
     if (projects.length > 0) {
       return `/${projects[0].id}`
     }
-    // 无项目则留在首页（显示引导创建页面）
   }
 
   // 检查目标 projectId 是否有效，同时保存 last_project
@@ -90,7 +92,6 @@ router.beforeEach(async (to) => {
     if (targetProjectId === 'default' || !projects.some((p: any) => p.id === targetProjectId)) {
       return '/'
     }
-    // 每次进入有效项目时自动记录，下次登录直接跳转
     localStorage.setItem('last_project', targetProjectId)
   }
 
