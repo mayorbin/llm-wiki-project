@@ -7,7 +7,6 @@ import { useRoute } from 'vue-router'
 import { filesApi } from '@/api/files'
 import { knowledgeApi } from '@/api/knowledge'
 import { renderMarkdown } from '@/lib/markdown'
-import DirTreeNode from '@/components/DirTreeNode.vue'
 
 const route = useRoute()
 const projectId = route.params.projectId as string
@@ -25,9 +24,32 @@ const showDeleteConfirm = ref(false)
 const uploading = ref(false)
 const dragOver = ref(false)
 
-const rootDirs = computed(() =>
-  dirTree.value.filter((n: any) => n.type === 'directory')
-)
+// 展开状态：Set 存放已展开目录的 path
+const expandedDirs = ref<Set<string>>(new Set())
+
+// 扁平化目录列表：仅展开的节点显示其子目录
+const flatDirs = computed(() => {
+  const result: { name: string; path: string; depth: number; hasChildren: boolean }[] = []
+  function walk(nodes: any[], depth: number) {
+    for (const n of nodes) {
+      if (n.type !== 'directory') continue
+      const hasChildren = (n.children || []).some((c: any) => c.type === 'directory')
+      result.push({ name: n.name, path: n.path, depth, hasChildren })
+      if (expandedDirs.value.has(n.path)) {
+        walk(n.children || [], depth + 1)
+      }
+    }
+  }
+  walk(dirTree.value, 0)
+  return result
+})
+
+function toggleDir(path: string) {
+  const next = new Set(expandedDirs.value)
+  if (next.has(path)) next.delete(path)
+  else next.add(path)
+  expandedDirs.value = next
+}
 
 async function loadDir() {
   loading.value = true
@@ -135,16 +157,31 @@ watch(currentDir, loadDir)
       </div>
 
       <div class="fm-body">
-        <nav class="fm-sidebar" v-if="rootDirs.length > 0">
+        <nav class="fm-sidebar" v-if="dirTree.length > 0">
           <div class="fm-sidebar-label">目录</div>
-          <DirTreeNode
-            v-for="node in rootDirs"
-            :key="node.path"
-            :node="node"
-            :depth="0"
-            :currentDir="currentDir"
-            @select="(path: string) => currentDir = path"
-          />
+          <template v-if="flatDirs.length > 0">
+            <div
+              v-for="d in flatDirs"
+              :key="d.path"
+              class="tree-node"
+              :class="{ active: currentDir === d.path }"
+              :style="{ paddingLeft: (d.depth * 14 + 11) + 'px' }"
+              @click="currentDir = d.path"
+            >
+              <span
+                v-if="d.hasChildren"
+                class="tree-chevron"
+                :class="{ expanded: expandedDirs.has(d.path) }"
+                @click.stop="toggleDir(d.path)"
+              >
+                <svg viewBox="0 0 20 20" fill="currentColor" width="12"><path d="M7 5l5 5-5 5" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+              </span>
+              <span v-else class="tree-chevron-spacer" />
+              <svg class="tree-icon" viewBox="0 0 20 20" fill="currentColor" width="14"><path d="M2 5a2 2 0 012-2h3.6c.4 0 .8.2 1 .5L10 5h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V5z"/></svg>
+              <span class="tree-name">{{ d.name }}</span>
+            </div>
+          </template>
+          <div v-else class="fm-sidebar-empty">暂无子目录</div>
         </nav>
 
         <div class="fm-main" :class="{ drag: dragOver }" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop">
@@ -224,8 +261,29 @@ watch(currentDir, loadDir)
 /* body */
 .fm-body { display: flex; background: var(--bg-card); border: 1px solid var(--border); border-top: none; border-radius: 0 0 var(--radius-lg) var(--radius-lg); min-height: 400px; overflow: hidden; }
 
-.fm-sidebar { width: 180px; border-right: 1px solid var(--border-light); padding: 14px 0; flex-shrink: 0; }
+.fm-sidebar { width: 200px; border-right: 1px solid var(--border-light); padding: 14px 0; flex-shrink: 0; overflow-y: auto; }
 .fm-sidebar-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; padding: 0 14px 8px; }
+.fm-sidebar-empty { font-size: 12px; color: var(--text-muted); padding: 4px 14px; }
+
+/* directory tree nodes */
+.tree-node {
+  display: flex; align-items: center; gap: 5px;
+  padding: 6px 12px 6px 11px;
+  font-size: 13px; color: var(--text-secondary);
+  cursor: pointer; transition: all var(--transition); user-select: none;
+}
+.tree-node:hover { background: var(--bg-subtle); color: var(--text-primary); }
+.tree-node.active { background: var(--accent-light); color: var(--accent); font-weight: 600; }
+.tree-node.active .tree-icon { color: var(--accent); }
+.tree-chevron {
+  display: flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; flex-shrink: 0;
+  color: var(--text-muted); transition: transform var(--transition);
+}
+.tree-chevron.expanded { transform: rotate(90deg); }
+.tree-chevron-spacer { width: 16px; flex-shrink: 0; }
+.tree-icon { color: var(--text-muted); flex-shrink: 0; }
+.tree-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .fm-main { flex: 1; padding: 0; min-width: 0; transition: border-color var(--transition); }
 .fm-main.drag { background: var(--accent-light); }
