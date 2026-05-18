@@ -39,7 +39,7 @@ async function handleLogin() {
           <defs><linearGradient id="login-grad" x1="0" y1="0" x2="48" y2="48"><stop stop-color="#D97706"/><stop offset="1" stop-color="#EA580C"/></linearGradient></defs>
         </svg>
         <h1>LLM Wiki</h1>
-        <p class="tagline">构建团队知识库，<br>让信息自动关联成网。</p>
+        <p class="tagline">上传文件，AI 自动构建知识图谱</p>
       </div>
 
       <!-- 右侧表单 -->
