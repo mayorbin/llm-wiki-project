@@ -5,11 +5,15 @@
 import { ref, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { projectsApi } from '@/api/projects'
 
 const router = useRouter()
 const route = useRoute()
 const auth = useAuthStore()
 const dropdownOpen = ref(false)
+const deleteTarget = ref<any>(null)
+const deleting = ref(false)
+const deleteError = ref('')
 
 const activeProjects = computed(() => (auth.projects || []).filter((p: any) => p.status !== 'archived'))
 const archivedProjects = computed(() => (auth.projects || []).filter((p: any) => p.status === 'archived'))
@@ -40,6 +44,28 @@ function toggleDropdown() { dropdownOpen.value = !dropdownOpen.value }
 function closeDropdown() { dropdownOpen.value = false }
 function goHome() { dropdownOpen.value = false; router.push('/') }
 function logout() { auth.logout(); router.push('/login') }
+
+function confirmDelete(project: any) {
+  deleteError.value = ''
+  deleteTarget.value = project
+}
+
+async function executeDelete() {
+  if (!deleteTarget.value) return
+  deleting.value = true; deleteError.value = ''
+  try {
+    await projectsApi.delete(deleteTarget.value.id)
+    await auth.initialize()
+    // 如果删除的是当前项目，跳首页
+    if (deleteTarget.value.id === route.params.projectId) {
+      router.push('/')
+    }
+    deleteTarget.value = null
+    dropdownOpen.value = false
+  } catch (e: any) {
+    deleteError.value = e.response?.data?.detail || '删除失败'
+  } finally { deleting.value = false }
+}
 </script>
 
 <template>
@@ -70,7 +96,7 @@ function logout() { auth.logout(); router.push('/login') }
         </div>
 
         <!-- 项目切换 -->
-        <div class="project-switch" v-click-outside="closeDropdown">
+        <div class="project-switch">
           <button class="project-trigger" @click="toggleDropdown">
             <span class="project-trigger-dot" />
             <span class="project-trigger-name">{{ currentProject?.name || '无项目' }}</span>
@@ -84,16 +110,25 @@ function logout() { auth.logout(); router.push('/login') }
 
             <div v-if="activeProjects.length === 0" class="dropdown-empty">暂无活跃项目</div>
 
-            <button
+            <div
               v-for="p in activeProjects" :key="p.id"
               class="dropdown-item"
               :class="{ current: p.id === route.params.projectId }"
-              @click="switchProject(p.id)"
             >
-              <span class="dropdown-item-dot" />
-              <span class="dropdown-item-name">{{ p.name }}</span>
-              <span class="dropdown-item-role">{{ p.role === 'owner' ? 'Owner' : p.role === 'editor' ? 'Editor' : 'Viewer' }}</span>
-            </button>
+              <span class="dropdown-item-main" @click="switchProject(p.id)">
+                <span class="dropdown-item-dot" />
+                <span class="dropdown-item-name">{{ p.name }}</span>
+                <span class="dropdown-item-role">{{ p.role === 'owner' ? 'Owner' : p.role === 'editor' ? 'Editor' : 'Viewer' }}</span>
+              </span>
+              <button
+                v-if="p.role === 'owner'"
+                class="dropdown-delete"
+                title="删除项目"
+                @click.stop="confirmDelete(p)"
+              >
+                <svg viewBox="0 0 16 16" fill="currentColor" width="13"><path d="M5 3h6v1H5zM6 5h4l-.4 8H6.4L6 5zM7 2h2v1H7z" fill-rule="evenodd"/></svg>
+              </button>
+            </div>
 
             <template v-if="archivedProjects.length > 0">
               <div class="dropdown-divider" />
@@ -159,6 +194,24 @@ function logout() { auth.logout(); router.push('/login') }
       </div>
     </aside>
 
+    <!-- 删除确认弹窗 -->
+    <div v-if="deleteTarget" class="modal-overlay" @click.self="deleteTarget = null">
+      <div class="modal">
+        <div class="modal-header">确认删除项目</div>
+        <div class="modal-body">
+          <p>确定要删除 <strong>{{ deleteTarget.name }}</strong> 吗？</p>
+          <p style="color:var(--error-text);font-size:12px;margin-top:8px">此操作将删除项目下的所有 Wiki 页面、源文件和图谱数据，且不可撤销。</p>
+          <div v-if="deleteError" class="error-tip">{{ deleteError }}</div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-secondary" @click="deleteTarget = null" :disabled="deleting">取消</button>
+          <button class="btn-danger" @click="executeDelete" :disabled="deleting">
+            {{ deleting ? '删除中...' : '确认删除' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
     <main class="main">
       <router-view v-slot="{ Component }">
         <transition name="page" mode="out-in">
@@ -221,18 +274,34 @@ function logout() { auth.logout(); router.push('/login') }
 .dropdown-empty { padding: 14px; font-size: 12px; color: var(--text-muted); text-align: center; }
 
 .dropdown-item {
-  width: 100%; display: flex; align-items: center; gap: 9px;
-  padding: 9px 14px; background: transparent; border: none; border-radius: 0;
-  font-size: 13px; color: var(--text-primary); text-align: left;
-  cursor: pointer; transition: background var(--transition);
+  width: 100%; display: flex; align-items: center; gap: 4px;
+  padding: 4px 10px; background: transparent; border-radius: 0;
+  transition: background var(--transition);
 }
 .dropdown-item:hover { background: var(--bg-subtle); }
-.dropdown-item.current { background: var(--accent-light); color: var(--accent); font-weight: 600; }
+.dropdown-item.current { background: var(--accent-light); }
+
+.dropdown-item-main {
+  flex: 1; display: flex; align-items: center; gap: 9px;
+  padding: 5px 4px; background: transparent; border: none; border-radius: 0;
+  font-size: 13px; color: var(--text-primary); text-align: left;
+  cursor: pointer;
+}
+.dropdown-item.current .dropdown-item-name { color: var(--accent); font-weight: 600; }
 
 .dropdown-item-dot {
   width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex-shrink: 0;
 }
 .dropdown-item.current .dropdown-item-dot { box-shadow: 0 0 0 3px var(--accent-ring); }
+
+.dropdown-delete {
+  padding: 5px; background: transparent; color: var(--text-muted);
+  border-radius: var(--radius-sm); flex-shrink: 0;
+  transition: all var(--transition);
+}
+.dropdown-delete:hover { color: #DC2626; background: var(--error-bg); }
+
+.error-tip { background: var(--error-bg); color: var(--error-text); padding: 8px 12px; border-radius: var(--radius-sm); font-size: 12px; margin-top: 10px; }
 
 .archived-dot { background: var(--text-muted); }
 
