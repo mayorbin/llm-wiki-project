@@ -62,7 +62,7 @@ onMounted(() => { loadSettings(); loadAuditLog() })
 
 <template>
   <div class="settings-page">
-    <h2>项目设置</h2>
+    <h2>项目设置 <span style="font-size:14px;background:#D97706;color:#fff;padding:2px 8px;border-radius:4px">BUILD-OK-2026</span></h2>
 
     <div class="card" style="margin-bottom:18px" v-if="settings">
       <h3 class="card-title">LLM 参数</h3>
@@ -131,7 +131,7 @@ onMounted(() => { loadSettings(); loadAuditLog() })
     <div class="card">
       <h3 class="card-title">操作记录</h3>
 
-      <div v-if="auditStatus === 'loading'" style="color:var(--text-muted);font-size:13px;padding:12px 0">加载中...</div>
+      <div v-if="auditStatus === 'loading'" style="color:var(--text-muted);font-size:13px;padding:12px 0">正在加载操作记录...</div>
 
       <div v-else-if="auditStatus === 'error'" style="padding:12px 0">
         <span style="color:var(--error-text);font-size:13px">{{ auditError }}</span>

@@ -1,21 +1,39 @@
 // frontend/src/api/maintenance.ts
-/** 维护 API——审计日志、备份、健康检查 */
-import client from './client'
+/** 维护 API——审计日志、备份。使用独立 axios 实例避免拦截器问题。 */
+import axios from 'axios'
+
+const raw = axios.create({
+  baseURL: '/api',
+  timeout: 10000,
+  headers: { 'Content-Type': 'application/json' },
+})
+
+// 请求拦截：注入 JWT（不触发 activeRequests 计数器）
+raw.interceptors.request.use((config) => {
+  const token = localStorage.getItem('access_token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
+// 响应拦截：不自动刷新 Token，只做错误传递
+raw.interceptors.response.use(
+  (res) => res,
+  (err) => Promise.reject(err),
+)
 
 export const maintenanceApi = {
-  /** 获取项目审计日志（cursor-based 分页） */
   getAuditLog(projectId: string, limit = 50) {
-    return client.get('/audit-log', { params: { project_id: projectId, limit } })
+    return raw.get('/audit-log', { params: { project_id: projectId, limit } })
   },
-  /** 导出项目备份（返回 tar.gz blob） */
   exportBackup(projectId: string) {
-    return client.post('/backup/export', { project_id: projectId }, { responseType: 'blob' })
+    return raw.post('/backup/export', { project_id: projectId }, { responseType: 'blob' })
   },
-  /** 导入项目备份 */
   importBackup(projectId: string, file: File) {
     const form = new FormData()
     form.append('project_id', projectId)
     form.append('file', file)
-    return client.post('/backup/import', form, { headers: { 'Content-Type': 'multipart/form-data' } })
+    return raw.post('/backup/import', form, { headers: { 'Content-Type': 'multipart/form-data' } })
   },
 }
