@@ -72,8 +72,8 @@ router.beforeEach(async (to) => {
     return { name: 'Login', query: { redirect: to.fullPath } }
   }
 
-  // 已登录且访问根路径：有项目则跳转第一个项目
-  if (to.path === '/' && auth.isAuthenticated) {
+  // 已登录且访问根路径：有项目则跳转第一个项目（不带 ?new=1 参数时）
+  if (to.path === '/' && !to.query.new && auth.isAuthenticated) {
     const lastProject = localStorage.getItem('last_project')
     const projects = auth.projects || []
 

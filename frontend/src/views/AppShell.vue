@@ -42,7 +42,7 @@ function switchProject(id: string) {
 
 function toggleDropdown() { dropdownOpen.value = !dropdownOpen.value }
 function closeDropdown() { dropdownOpen.value = false }
-function goHome() { dropdownOpen.value = false; router.push('/') }
+function goHome() { dropdownOpen.value = false; router.push({ path: '/', query: { new: '1' } }) }
 function logout() { auth.logout(); router.push('/login') }
 
 function confirmDelete(project: any) {
