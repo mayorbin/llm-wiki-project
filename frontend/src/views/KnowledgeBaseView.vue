@@ -85,13 +85,17 @@ function formatSize(bytes: number): string {
   return `${(bytes/1048576).toFixed(1)} MB`
 }
 
-function getFileIcon(name: string): string {
-  const ext = (name || '').split('.').pop()?.toLowerCase()
-  if (ext === 'md') return 'MD'
-  if (ext === 'pdf') return 'PDF'
-  if (ext === 'docx') return 'DOC'
-  if (ext === 'pptx') return 'PPT'
-  return 'FILE'
+function formatDate(iso: string): string {
+  if (!iso) return '-'
+  return iso.slice(0, 10).replace(/^\d{4}-/, '')  // "05-18"
+}
+
+function getFileExt(name: string): string {
+  return (name || '').split('.').pop()?.toLowerCase() || ''
+}
+
+function getFileStem(name: string): string {
+  return (name || '').replace(/\.[^.]+$/, '')
 }
 
 onMounted(loadDir)
@@ -146,16 +150,17 @@ watch(currentDir, loadDir)
             <p>目录为空，拖拽文件或点击上传</p>
           </div>
           <table v-else>
-            <thead><tr><th>文件名</th><th>大小</th><th></th></tr></thead>
+            <thead><tr><th>文件名</th><th>大小</th><th>修改日期</th><th></th></tr></thead>
             <tbody>
-              <tr v-for="f in fileList" :key="f.id || f.file_id">
+              <tr v-for="f in fileList" :key="f.name">
                 <td>
                   <div class="file-cell">
-                    <span class="file-icon" :class="(f.filename||f.name||'').split('.').pop()?.toLowerCase()">{{ getFileIcon(f.filename || f.name || '') }}</span>
-                    <span class="file-name">{{ f.filename || f.name }}</span>
+                    <span class="file-ext" :class="getFileExt(f.name)">{{ getFileExt(f.name) }}</span>
+                    <span class="file-stem">{{ getFileStem(f.name) }}</span>
                   </div>
                 </td>
-                <td class="size-col">{{ formatSize(f.size_bytes || f.size) }}</td>
+                <td class="size-col">{{ formatSize(f.size_bytes) }}</td>
+                <td class="date-col">{{ formatDate(f.modified_at) }}</td>
                 <td class="action-col">
                   <button class="btn-ghost" style="padding:4px 6px" @click="confirmDelete(f)" title="删除">
                     <svg viewBox="0 0 20 20" fill="currentColor" width="14"><path d="M6 4h8v1H6zM7 6h6l-.5 10h-5L7 6zM8 3h4v1H8z" fill-rule="evenodd"/></svg>
@@ -237,19 +242,23 @@ tbody td { padding: 11px 18px; border-bottom: 1px solid var(--border-light); }
 tbody tr:hover { background: var(--bg-subtle); }
 tbody tr:last-child td { border-bottom: none; }
 
-.file-cell { display: flex; align-items: center; gap: 10px; }
-.file-icon {
-  width: 32px; height: 32px; border-radius: 7px;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 10px; font-weight: 800; flex-shrink: 0;
+.file-cell { display: flex; align-items: center; gap: 8px; }
+.file-ext {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 32px; padding: 2px 7px; border-radius: 4px;
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase;
   background: var(--bg-subtle); color: var(--text-muted);
 }
-.file-icon.pdf { background: #FEF2F2; color: #DC2626; }
-.file-icon.md { background: #F0FDF4; color: #16A34A; }
-.file-icon.docx { background: #EFF6FF; color: #2563EB; }
-.file-icon.pptx { background: #FFF7ED; color: #EA580C; }
-.file-name { font-weight: 500; font-size: 14px; }
-.size-col { color: var(--text-muted); font-size: 13px; }
+.file-ext.pdf { background: #FEF2F2; color: #DC2626; }
+.file-ext.md { background: #F0FDF4; color: #16A34A; }
+.file-ext.docx, .file-ext.doc { background: #EFF6FF; color: #2563EB; }
+.file-ext.pptx, .file-ext.ppt { background: #FFF7ED; color: #EA580C; }
+.file-ext.xlsx, .file-ext.xls, .file-ext.csv { background: #F0FDF4; color: #059669; }
+.file-ext.jpg, .file-ext.png, .file-ext.gif, .file-ext.svg { background: #FAF5FF; color: #7C3AED; }
+
+.file-stem { font-weight: 500; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px; }
+.size-col { color: var(--text-muted); font-size: 13px; white-space: nowrap; }
+.date-col { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
 .action-col { text-align: right; }
 
 .query-area { width: 100%; max-width: 780px; }
