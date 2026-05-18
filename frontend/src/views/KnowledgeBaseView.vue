@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 知识库主页——源文件管理 + 知识查询 Tab 切换。
+ * 知识库主页——文件管理器 + 知识查询。
  */
 import { ref, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
@@ -16,18 +16,14 @@ const currentDir = ref('')
 const dirTree = ref<string[]>([])
 const fileList = ref<any[]>([])
 const loading = ref(false)
-
-// 查询
 const queryText = ref('')
 const queryResult = ref('')
 const queryLoading = ref(false)
-
-// 删除确认
 const deleteTarget = ref<any>(null)
 const showDeleteConfirm = ref(false)
-
-// 上传进度
 const uploading = ref(false)
+const dragOver = ref(false)
+const pageStats = ref({ files: 0, pages: 0, lastIngest: '' })
 
 async function loadDir() {
   loading.value = true
@@ -38,11 +34,21 @@ async function loadDir() {
     ])
     dirTree.value = dirsRes.data?.directories || []
     fileList.value = filesRes.data?.files || []
-  } catch (e) {
-    console.error('加载目录失败:', e)
-  } finally {
-    loading.value = false
+    pageStats.value.files = fileList.value.length
+  } catch (e) { console.error('加载目录失败:', e) }
+  finally { loading.value = false }
+}
+
+function onDragOver(e: DragEvent) { e.preventDefault(); dragOver.value = true }
+function onDragLeave() { dragOver.value = false }
+async function onDrop(e: DragEvent) {
+  e.preventDefault(); dragOver.value = false
+  if (!e.dataTransfer?.files.length) return
+  uploading.value = true
+  for (const file of Array.from(e.dataTransfer.files)) {
+    try { await filesApi.uploadFile(projectId, currentDir.value, file) } catch (e) { console.error(e) }
   }
+  uploading.value = false; loadDir()
 }
 
 async function handleUpload(e: Event) {
@@ -50,33 +56,17 @@ async function handleUpload(e: Event) {
   if (!input.files?.length) return
   uploading.value = true
   for (const file of Array.from(input.files)) {
-    try {
-      await filesApi.uploadFile(projectId, currentDir.value, file)
-    } catch (e) {
-      console.error('上传失败:', e)
-    }
+    try { await filesApi.uploadFile(projectId, currentDir.value, file) } catch (e) { console.error(e) }
   }
-  uploading.value = false
-  loadDir()
+  uploading.value = false; loadDir()
   input.value = ''
 }
 
-function confirmDelete(file: any) {
-  deleteTarget.value = file
-  showDeleteConfirm.value = true
-}
-
+function confirmDelete(file: any) { deleteTarget.value = file; showDeleteConfirm.value = true }
 async function executeDelete() {
   if (!deleteTarget.value) return
-  try {
-    const fileId = deleteTarget.value.id || deleteTarget.value.file_id
-    await filesApi.deleteFile(fileId, projectId)
-  } catch (e) {
-    console.error('删除失败:', e)
-  }
-  showDeleteConfirm.value = false
-  deleteTarget.value = null
-  loadDir()
+  try { await filesApi.deleteFile(deleteTarget.value.id || deleteTarget.value.file_id, projectId) } catch (e) { console.error(e) }
+  showDeleteConfirm.value = false; deleteTarget.value = null; loadDir()
 }
 
 async function handleQuery() {
@@ -84,107 +74,127 @@ async function handleQuery() {
   queryLoading.value = true
   try {
     const res = await knowledgeApi.query(projectId, queryText.value)
-    queryResult.value = res.data?.answer || res.data || JSON.stringify(res.data)
+    queryResult.value = res.data?.answer || JSON.stringify(res.data)
   } catch (e: any) {
     queryResult.value = `查询失败: ${e.response?.data?.detail || e.message}`
-  } finally {
-    queryLoading.value = false
-  }
+  } finally { queryLoading.value = false }
 }
 
-function formatFileSize(bytes: number): string {
+function formatSize(bytes: number): string {
   if (!bytes) return '-'
   if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  if (bytes < 1048576) return `${(bytes/1024).toFixed(1)} KB`
+  return `${(bytes/1048576).toFixed(1)} MB`
+}
+
+function getFileIcon(name: string): string {
+  const ext = (name || '').split('.').pop()?.toLowerCase()
+  if (ext === 'md') return 'MD'
+  if (ext === 'pdf') return 'PDF'
+  if (ext === 'docx') return 'DOC'
+  if (ext === 'pptx') return 'PPT'
+  return 'FILE'
 }
 
 onMounted(loadDir)
-watch(() => route.params.projectId, () => { currentDir.value = ''; loadDir() })
+watch(currentDir, loadDir)
 </script>
 
 <template>
-  <div class="knowledge-page">
-    <h2>知识库</h2>
-
-    <div class="tabs">
-      <button :class="{ active: activeTab === 'files' }" @click="activeTab = 'files'">📂 源文件</button>
-      <button :class="{ active: activeTab === 'query' }" @click="activeTab = 'query'">💬 查询</button>
+  <div class="kb-page">
+    <!-- 标签栏 -->
+    <div class="tab-bar">
+      <button :class="{ active: activeTab === 'files' }" @click="activeTab = 'files'">文件管理</button>
+      <button :class="{ active: activeTab === 'query' }" @click="activeTab = 'query'">知识查询</button>
     </div>
 
-    <!-- 源文件管理 -->
-    <div v-if="activeTab === 'files'" class="files-layout">
-      <div class="dir-panel">
-        <div class="dir-header">📁 目录</div>
-        <div class="dir-item" :class="{ active: currentDir === '' }" @click="currentDir = ''; loadDir()">📂 raw/</div>
-        <div
-          v-for="dir in dirTree" :key="dir" class="dir-item"
-          @click="currentDir = dir; loadDir()"
-        >📂 {{ dir }}</div>
-        <div class="upload-area">
-          <label class="upload-label">
-            {{ uploading ? '上传中...' : '📤 上传文件' }}
+    <!-- 文件管理 -->
+    <template v-if="activeTab === 'files'">
+      <div class="toolbar">
+        <div class="dir-breadcrumb">
+          <span class="bread-item" :class="{ active: currentDir === '' }" @click="currentDir = ''">raw/</span>
+          <template v-if="currentDir">
+            <span class="bread-sep">/</span>
+            <span class="bread-item active">{{ currentDir }}</span>
+          </template>
+        </div>
+        <div class="toolbar-actions">
+          <label class="btn-ghost upload-label">
+            <svg viewBox="0 0 20 20" fill="currentColor" width="16"><path d="M3 15a2 2 0 002 2h10a2 2 0 002-2M12 3l4 4-4 4M16 7H6"/></svg>
+            上传文件
             <input type="file" multiple hidden @change="handleUpload" :disabled="uploading" />
           </label>
         </div>
       </div>
 
-      <div class="file-panel">
-        <div class="file-header">
-          <span>{{ currentDir || 'raw/' }} ({{ fileList.length }})</span>
-        </div>
+      <div class="files-card" :class="{ drag: dragOver }" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop">
+        <!-- dir tree -->
+        <nav class="dir-nav" v-if="dirTree.length > 0">
+          <div class="dir-nav-title">目录</div>
+          <div
+            v-for="d in dirTree" :key="d"
+            class="dir-nav-item" :class="{ active: currentDir === d }"
+            @click="currentDir = d"
+          >{{ d }}</div>
+        </nav>
 
-        <div v-if="fileList.length === 0 && !loading" class="empty-state">
-          <div class="empty-icon">📂</div>
-          <p>目录为空</p>
-          <p class="empty-hint">拖拽文件到此处或点击上传</p>
-        </div>
+        <!-- file list -->
+        <div class="file-area">
+          <div v-if="fileList.length === 0 && !loading" class="empty-state">
+            <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.25">
+              <path d="M12 10h24l8 10v34a2 2 0 01-2 2H12a2 2 0 01-2-2V12a2 2 0 012-2z"/>
+              <line x1="16" y1="22" x2="40" y2="22"/><line x1="16" y1="28" x2="32" y2="28"/>
+            </svg>
+            <h3>此目录为空</h3>
+            <p>拖拽文件到此处或点击上传按钮</p>
+          </div>
 
-        <table v-else class="file-table">
-          <thead>
-            <tr><th>文件名</th><th>大小</th><th>状态</th><th>操作</th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="f in fileList" :key="f.id || f.file_id">
-              <td>{{ f.filename || f.name }}</td>
-              <td class="size">{{ formatFileSize(f.size_bytes || f.size) }}</td>
-              <td>
-                <span v-if="f.status === 'ingested'" class="badge success">已摄入</span>
-                <span v-else-if="f.status === 'ingesting'" class="badge warning">摄入中</span>
-                <span v-else class="badge">未摄入</span>
-              </td>
-              <td class="actions">
-                <a :href="`/api/files/${f.id || f.file_id}/download`" class="download-link">下载</a>
-                <button class="link-btn danger" @click="confirmDelete(f)">删除</button>
-              </td>
-            </tr>
-          </tbody>
-        </table>
+          <table v-else>
+            <thead><tr><th>文件</th><th>大小</th><th style="width:80px"></th></tr></thead>
+            <tbody>
+              <tr v-for="f in fileList" :key="f.id || f.file_id">
+                <td>
+                  <div class="file-cell">
+                    <span class="file-icon">{{ getFileIcon(f.filename || f.name || '') }}</span>
+                    <span class="file-name">{{ f.filename || f.name }}</span>
+                  </div>
+                </td>
+                <td class="size-col">{{ formatSize(f.size_bytes || f.size) }}</td>
+                <td class="action-col">
+                  <button class="btn-ghost" style="font-size:12px;padding:4px 8px" @click="confirmDelete(f)" title="删除">
+                    <svg viewBox="0 0 20 20" fill="currentColor" width="14"><path d="M6 4h8v1H6zM7 6h6l-.5 10h-5L7 6zM8 3h4v1H8z" fill-rule="evenodd"/></svg>
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
-    </div>
+    </template>
 
     <!-- 知识查询 -->
-    <div v-if="activeTab === 'query'" class="query-panel">
-      <div class="query-input-row">
-        <input v-model="queryText" placeholder="输入问题..." @keyup.enter="handleQuery" class="query-input" />
-        <button @click="handleQuery" :disabled="queryLoading" class="query-btn">
-          {{ queryLoading ? '查询中...' : '查询' }}
-        </button>
+    <template v-if="activeTab === 'query'">
+      <div class="query-area">
+        <div class="query-input-row">
+          <input v-model="queryText" placeholder="输入问题，例如：这些文档的核心主题是什么？" @keyup.enter="handleQuery" class="query-input" />
+          <button class="btn-primary" :disabled="queryLoading" @click="handleQuery">
+            {{ queryLoading ? '查询中...' : '查询' }}
+          </button>
+        </div>
+        <div v-if="queryResult" class="query-result card" v-html="renderMarkdown(queryResult, projectId)" />
       </div>
-      <div v-if="queryResult" class="query-result" v-html="renderMarkdown(queryResult, projectId)" />
-    </div>
+    </template>
 
-    <!-- 删除确认对话框 -->
+    <!-- 删除确认 -->
     <div v-if="showDeleteConfirm" class="modal-overlay" @click.self="showDeleteConfirm = false">
       <div class="modal">
-        <div class="modal-header">⚠ 确认删除</div>
+        <div class="modal-header">确认删除</div>
         <div class="modal-body">
-          <p>确定要删除 <strong>{{ deleteTarget?.filename || deleteTarget?.name }}</strong> 吗？</p>
-          <p class="warning-text">此操作将级联删除关联的 Wiki 页面，且不可撤销。</p>
+          <p>删除 <strong>{{ deleteTarget?.filename || deleteTarget?.name }}</strong> 将级联删除关联的 Wiki 页面，且不可撤销。</p>
         </div>
         <div class="modal-footer">
-          <button class="cancel-btn" @click="showDeleteConfirm = false">取消</button>
-          <button class="delete-btn" @click="executeDelete">确认删除</button>
+          <button class="btn-secondary" @click="showDeleteConfirm = false">取消</button>
+          <button class="btn-danger" @click="executeDelete">确认删除</button>
         </div>
       </div>
     </div>
@@ -192,201 +202,50 @@ watch(() => route.params.projectId, () => { currentDir.value = ''; loadDir() })
 </template>
 
 <style scoped>
-.knowledge-page { max-width: 1000px; }
+.kb-page { max-width: 960px; }
 
-h2 { font-size: 20px; font-weight: 600; margin-bottom: 16px; }
+.tab-bar { display: flex; gap: 2px; margin-bottom: 20px; background: var(--bg-subtle); border-radius: var(--radius); padding: 3px; width: fit-content; }
+.tab-bar button { padding: 7px 20px; background: transparent; color: var(--text-secondary); border-radius: var(--radius-sm); font-size: 13px; font-weight: 500; transition: all var(--transition); }
+.tab-bar button.active { background: var(--bg-card); color: var(--text-primary); font-weight: 600; box-shadow: var(--shadow-xs); }
 
-.tabs { display: flex; gap: 4px; margin-bottom: 20px; }
+.toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.dir-breadcrumb { display: flex; align-items: center; gap: 4px; font-size: 14px; }
+.bread-item { color: var(--text-muted); cursor: pointer; padding: 2px 6px; border-radius: 4px; transition: all var(--transition); }
+.bread-item:hover { color: var(--text-primary); background: var(--bg-subtle); }
+.bread-item.active { color: var(--text-primary); font-weight: 600; }
+.bread-sep { color: var(--text-muted); font-size: 12px; }
+.upload-label { cursor: pointer; }
 
-.tabs button {
-  padding: 8px 20px;
-  background: transparent;
-  color: var(--text-secondary);
-  border-radius: var(--radius-sm);
-  font-size: 13px;
+.files-card { display: flex; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-xs); overflow: hidden; min-height: 340px; transition: border-color var(--transition); }
+.files-card.drag { border-color: var(--accent); border-style: dashed; }
+
+.dir-nav { width: 180px; border-right: 1px solid var(--border-light); padding: 16px; flex-shrink: 0; }
+.dir-nav-title { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+.dir-nav-item { padding: 6px 10px; border-radius: var(--radius-sm); font-size: 13px; color: var(--text-secondary); cursor: pointer; transition: all var(--transition); }
+.dir-nav-item:hover { background: var(--bg-subtle); color: var(--text-primary); }
+.dir-nav-item.active { background: var(--accent-light); color: var(--accent); font-weight: 600; }
+
+.file-area { flex: 1; padding: 16px 20px; min-width: 0; }
+
+.file-cell { display: flex; align-items: center; gap: 10px; }
+.file-icon {
+  width: 32px; height: 32px; border-radius: var(--radius-sm); background: var(--bg-subtle);
+  display: flex; align-items: center; justify-content: center; font-size: 10px;
+  font-weight: 700; color: var(--text-muted); flex-shrink: 0;
 }
+.file-name { font-weight: 500; font-size: 14px; }
 
-.tabs button.active {
-  background: var(--bg-card);
-  color: var(--accent);
-  font-weight: 500;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
-}
+.size-col { color: var(--text-muted); font-size: 13px; }
+.action-col { text-align: right; }
 
-.files-layout { display: flex; gap: 20px; }
-
-.dir-panel {
-  width: 200px;
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  padding: 12px;
-}
-
-.dir-header {
-  font-weight: 600;
-  font-size: 12px;
-  color: var(--text-secondary);
-  margin-bottom: 8px;
-}
-
-.dir-item {
-  padding: 6px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--text-primary);
-}
-
-.dir-item:hover { background: var(--bg-page); }
-
-.dir-item.active { background: var(--bg-page); color: var(--accent); font-weight: 500; }
-
-.upload-area {
-  margin-top: 12px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-color);
-}
-
-.upload-label {
-  display: block;
-  width: 100%;
-  padding: 8px;
-  text-align: center;
-  background: var(--accent);
-  color: #fff;
-  border-radius: var(--radius-sm);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.file-panel {
-  flex: 1;
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  padding: 16px;
-  overflow-x: auto;
-}
-
-.file-header { font-weight: 500; font-size: 13px; margin-bottom: 12px; }
-
-.empty-state { text-align: center; padding: 48px; color: var(--text-secondary); }
-
-.empty-icon { font-size: 48px; margin-bottom: 12px; }
-
-.empty-hint { font-size: 12px; margin-top: 4px; }
-
-.file-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-
-.file-table th {
-  text-align: left;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border-color);
-  color: var(--text-secondary);
-  font-weight: 500;
-  font-size: 11px;
-}
-
-.file-table td { padding: 10px; border-bottom: 1px solid var(--bg-page); }
-
-.size { color: var(--text-secondary); }
-
-.badge {
-  padding: 2px 10px;
-  border-radius: 10px;
-  font-size: 11px;
-  background: var(--bg-page);
-  color: var(--text-secondary);
-}
-
-.badge.success { background: var(--success-bg); color: var(--success-text); }
-
-.badge.warning { background: var(--warning-bg); color: var(--warning-text); }
-
-.actions { display: flex; gap: 12px; align-items: center; }
-
-.download-link { font-size: 12px; }
-
-.link-btn { background: transparent; padding: 0; font-size: 12px; }
-
-.link-btn.danger { color: var(--error-text); }
-
-.query-panel { max-width: 700px; }
-
-.query-input-row { display: flex; gap: 8px; margin-bottom: 16px; }
-
-.query-input { flex: 1; padding: 12px 16px; }
-
-.query-btn { padding: 10px 24px; background: var(--accent); color: #fff; }
-
-.query-result {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  padding: 20px;
-}
-
-.query-result :deep(h1),
-.query-result :deep(h2),
-.query-result :deep(h3) {
-  font-size: 15px;
-  font-weight: 600;
-  margin-top: 16px;
-  margin-bottom: 8px;
-}
-
-.query-result :deep(p) { margin-bottom: 8px; }
-
-.query-result :deep(a) { color: var(--accent-hover); }
-
-.query-result :deep(blockquote) {
-  border-left: 2px solid var(--accent);
-  padding-left: 12px;
-  color: var(--text-secondary);
-  margin: 8px 0;
-}
-
-.query-result :deep(code) {
-  background: var(--bg-page);
-  padding: 1px 4px;
-  border-radius: 3px;
-  font-size: 12px;
-}
-
-.query-result :deep(pre) {
-  background: var(--bg-page);
-  padding: 12px;
-  border-radius: var(--radius-sm);
-  overflow-x: auto;
-}
-
-.query-result :deep(pre code) { background: transparent; }
-
-.modal-overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.3);
-  display: flex; align-items: center; justify-content: center; z-index: 100;
-}
-
-.modal {
-  background: var(--bg-card);
-  border-radius: 12px;
-  width: 440px;
-  overflow: hidden;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.12);
-}
-
-.modal-header { padding: 16px 20px; font-weight: 600; font-size: 15px; }
-
-.modal-body { padding: 0 20px 16px; font-size: 13px; }
-
-.warning-text { color: var(--error-text); font-size: 12px; margin-top: 8px; }
-
-.modal-footer { display: flex; border-top: 1px solid var(--border-color); }
-
-.modal-footer button { flex: 1; padding: 12px; font-size: 13px; }
-
-.cancel-btn { background: var(--bg-card); color: var(--text-secondary); }
-
-.delete-btn { background: #DC2626; color: #fff; }
+.query-area { max-width: 740px; }
+.query-input-row { display: flex; gap: 10px; margin-bottom: 16px; }
+.query-input { flex: 1; padding: 12px 16px; font-size: 15px; }
+.query-result { font-size: 15px; line-height: 1.75; }
+.query-result :deep(h2) { font-size: 18px; margin-top: 20px; margin-bottom: 8px; }
+.query-result :deep(p) { margin-bottom: 10px; }
+.query-result :deep(a) { color: var(--accent); }
+.query-result :deep(blockquote) { border-left: 2.5px solid var(--accent); padding-left: 14px; color: var(--text-secondary); margin: 10px 0; }
+.query-result :deep(code) { font-size: 12.5px; }
+.query-result :deep(pre) { margin: 10px 0; }
 </style>

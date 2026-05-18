@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 项目设置——LLM 配置 + 备份 + 审计日志。
+ * 项目设置——LLM 配置 + 备份恢复 + 审计日志。
  */
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
@@ -13,61 +13,35 @@ const projectId = route.params.projectId as string
 const settings = ref<any>(null)
 const loading = ref(false)
 const saved = ref(false)
-
-// 审计日志
 const auditLog = ref<any[]>([])
 const auditLoading = ref(false)
+const showImport = ref(false)
 
 async function loadSettings() {
   loading.value = true
-  try {
-    const res = await projectsApi.getSettings(projectId)
-    // 后端返回 {project_id, settings: {...}, updated_at}，只取 settings 字段
-    settings.value = res.data?.settings || { llm: {}, features: {} }
-  } catch (e) {
-    console.error('加载设置失败:', e)
-  } finally {
-    loading.value = false
-  }
+  try { const res = await projectsApi.getSettings(projectId); settings.value = res.data?.settings || { llm: {}, features: {} } }
+  catch (e) { console.error(e) } finally { loading.value = false }
 }
 
 async function saveSettings() {
   loading.value = true
-  try {
-    await projectsApi.updateSettings(projectId, settings.value?.settings || settings.value)
-    saved.value = true
-    setTimeout(() => saved.value = false, 2000)
-  } catch (e) {
-    console.error('保存设置失败:', e)
-  } finally {
-    loading.value = false
-  }
+  try { await projectsApi.updateSettings(projectId, settings.value); saved.value = true; setTimeout(() => saved.value = false, 2000) }
+  catch (e) { console.error(e) } finally { loading.value = false }
 }
 
 async function loadAuditLog() {
   auditLoading.value = true
-  try {
-    const res = await maintenanceApi.getAuditLog(projectId, 50)
-    auditLog.value = res.data?.entries || []
-  } catch (e) {
-    console.error('加载审计日志失败:', e)
-  } finally {
-    auditLoading.value = false
-  }
+  try { const res = await maintenanceApi.getAuditLog(projectId, 50); auditLog.value = res.data?.entries || [] }
+  catch (e) { console.error(e) } finally { auditLoading.value = false }
 }
 
 async function handleExport() {
   try {
     const res = await maintenanceApi.exportBackup(projectId)
     const url = window.URL.createObjectURL(new Blob([res.data]))
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `backup-${projectId}-${Date.now()}.tar.gz`
-    a.click()
+    const a = document.createElement('a'); a.href = url; a.download = `backup-${projectId}-${Date.now()}.tar.gz`; a.click()
     window.URL.revokeObjectURL(url)
-  } catch (e) {
-    console.error('导出备份失败:', e)
-  }
+  } catch (e) { console.error(e) }
 }
 
 onMounted(() => { loadSettings(); loadAuditLog() })
@@ -77,117 +51,143 @@ onMounted(() => { loadSettings(); loadAuditLog() })
   <div class="settings-page">
     <h2>项目设置</h2>
 
-    <div class="section" v-if="settings">
-      <h3>LLM 配置</h3>
-      <div class="form-grid">
-        <label>模型 <input v-model="settings.llm.model" /></label>
-        <label>Temperature <input v-model.number="settings.llm.temperature" type="number" step="0.1" min="0" max="2" /></label>
-        <label>Max Tokens <input v-model.number="settings.llm.max_tokens" type="number" /></label>
+    <!-- LLM 配置 -->
+    <div class="card" style="margin-bottom:18px" v-if="settings">
+      <h3 class="card-title">LLM 参数</h3>
+      <p class="card-desc">为该知识库覆盖全局 LLM 配置。留空则使用系统默认值。</p>
+      <div class="fields-row">
+        <div class="field">
+          <label>模型</label>
+          <input v-model="settings.llm.model" placeholder="deepseek/deepseek-v4-flash" />
+        </div>
+        <div class="field">
+          <label>API 地址</label>
+          <input v-model="settings.llm.api_base" placeholder="http://..." />
+        </div>
+        <div class="field field-sm">
+          <label>Temperature</label>
+          <input v-model.number="settings.llm.temperature" type="number" step="0.1" min="0" max="2" placeholder="0.3" />
+        </div>
+        <div class="field field-sm">
+          <label>Max Tokens</label>
+          <input v-model.number="settings.llm.max_tokens" type="number" step="100" placeholder="8192" />
+        </div>
       </div>
     </div>
 
-    <div class="section" v-if="settings">
-      <h3>功能开关</h3>
-      <div class="form-grid">
-        <label><input type="checkbox" v-model="settings.features.auto_ingest_on_upload" /> 上传后自动摄入</label>
-        <label><input type="checkbox" v-model="settings.features.auto_graph_rebuild" /> 摄入后自动重建图谱</label>
+    <!-- 功能开关 -->
+    <div class="card" style="margin-bottom:18px" v-if="settings">
+      <h3 class="card-title">功能</h3>
+      <div class="toggle-list">
+        <label class="toggle-row">
+          <div class="toggle-switch">
+            <input type="checkbox" v-model="settings.features.auto_ingest_on_upload" />
+            <span class="toggle-track" />
+          </div>
+          <div>
+            <div class="toggle-title">上传后自动摄入</div>
+            <div class="toggle-desc">文件上传完成后立即触发 LLM 知识提取</div>
+          </div>
+        </label>
+        <label class="toggle-row">
+          <div class="toggle-switch">
+            <input type="checkbox" v-model="settings.features.auto_graph_rebuild" />
+            <span class="toggle-track" />
+          </div>
+          <div>
+            <div class="toggle-title">摄入后自动重建图谱</div>
+            <div class="toggle-desc">摄入完成后自动重新计算知识图谱</div>
+          </div>
+        </label>
       </div>
     </div>
 
-    <div class="section">
-      <h3>备份</h3>
-      <button @click="handleExport" class="action-btn">📦 导出备份 (tar.gz)</button>
+    <!-- 备份 -->
+    <div class="card" style="margin-bottom:18px">
+      <h3 class="card-title">备份与恢复</h3>
+      <p class="card-desc">导出项目数据（Wiki 页面 + 源文件 + 图谱）为 tar.gz 压缩包。恢复将覆盖当前数据。</p>
+      <div class="backup-actions">
+        <button class="btn-primary" @click="handleExport">
+          <svg viewBox="0 0 20 20" fill="currentColor" width="16"><path d="M10 2v12M6 10l4 4 4-4M4 16v1a1 1 0 001 1h10a1 1 0 001-1v-1" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+          导出备份
+        </button>
+        <button class="btn-secondary" @click="showImport = !showImport">
+          <svg viewBox="0 0 20 20" fill="currentColor" width="16"><path d="M10 14V2M6 6l4-4 4 4M4 16v1a1 1 0 001 1h10a1 1 0 001-1v-1" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+          导入备份
+        </button>
+      </div>
     </div>
 
-    <div class="section">
-      <h3>审计日志</h3>
-      <div v-if="auditLoading">加载中...</div>
-      <table v-else class="audit-table">
-        <thead>
-          <tr><th>时间</th><th>操作</th><th>用户</th><th>目标</th><th>结果</th></tr>
-        </thead>
+    <!-- 审计日志 -->
+    <div class="card">
+      <h3 class="card-title">操作记录</h3>
+      <div v-if="auditLoading" style="color:var(--text-muted);font-size:13px">加载中...</div>
+      <div v-else-if="auditLog.length === 0" style="color:var(--text-muted);font-size:13px">暂无操作记录</div>
+      <table v-else>
+        <thead><tr><th>时间</th><th>操作</th><th>用户</th><th>目标</th></tr></thead>
         <tbody>
-          <tr v-for="log in auditLog.slice(0, 20)" :key="log.id">
-            <td>{{ log.timestamp?.slice(0, 16) }}</td>
-            <td>{{ log.action }}</td>
+          <tr v-for="log in auditLog.slice(0, 30)" :key="log.id">
+            <td class="time-col">{{ (log.timestamp || '').slice(0, 16).replace('T', ' ') }}</td>
+            <td><span class="badge badge-muted">{{ log.action }}</span></td>
             <td>{{ log.username }}</td>
-            <td>{{ log.target }}</td>
-            <td>{{ log.result }}</td>
+            <td class="target-col">{{ log.target }}</td>
           </tr>
         </tbody>
       </table>
     </div>
 
-    <div class="action-bar">
-      <button @click="saveSettings" :disabled="loading" class="save-btn">
-        {{ saved ? '已保存' : '保存设置' }}
+    <!-- 保存 -->
+    <div class="save-bar">
+      <button class="btn-primary" :disabled="loading" @click="saveSettings">
+        <template v-if="saved">&#10003; 已保存</template>
+        <template v-else>保存设置</template>
       </button>
     </div>
   </div>
 </template>
 
 <style scoped>
-.settings-page { max-width: 700px; }
+.settings-page { max-width: 760px; padding-bottom: 40px; }
 
-h2 { font-size: 20px; font-weight: 600; margin-bottom: 24px; }
+h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; margin-bottom: 22px; }
 
-.section {
-  background: var(--bg-card);
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  padding: 20px;
-  margin-bottom: 16px;
+.card-title { font-size: 15px; font-weight: 650; margin-bottom: 4px; }
+.card-desc { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; }
+
+.fields-row { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 12px; }
+.field { display: flex; flex-direction: column; }
+.field label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 4px; }
+.field input { font-size: 13px; padding: 9px 12px; }
+.field-sm { max-width: 120px; }
+
+.toggle-list { display: flex; flex-direction: column; gap: 0; }
+.toggle-row {
+  display: flex; align-items: flex-start; gap: 14px; padding: 12px 0;
+  border-bottom: 1px solid var(--border-light); cursor: pointer;
 }
+.toggle-row:last-child { border-bottom: none; }
 
-h3 { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
-
-.form-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
+.toggle-switch { position: relative; width: 40px; height: 22px; flex-shrink: 0; }
+.toggle-switch input { position: absolute; opacity: 0; width: 100%; height: 100%; cursor: pointer; z-index: 1; }
+.toggle-track {
+  display: block; width: 100%; height: 100%; border-radius: 100px; background: var(--border-strong);
+  transition: background var(--transition); position: relative;
 }
-
-.form-grid label { font-size: 13px; color: var(--text-secondary); }
-
-.form-grid input[type="text"],
-.form-grid input[type="number"] {
-  display: block;
-  width: 100%;
-  margin-top: 4px;
+.toggle-track::after {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px;
+  border-radius: 50%; background: #fff; transition: transform var(--transition); box-shadow: 0 1px 3px rgba(0,0,0,0.15);
 }
+.toggle-switch input:checked + .toggle-track { background: var(--accent); }
+.toggle-switch input:checked + .toggle-track::after { transform: translateX(18px); }
 
-.form-grid input[type="checkbox"] { margin-right: 6px; accent-color: var(--accent); }
+.toggle-title { font-size: 14px; font-weight: 500; }
+.toggle-desc { font-size: 12px; color: var(--text-muted); margin-top: 1px; }
 
-.action-btn {
-  padding: 8px 16px;
-  background: var(--bg-page);
-  border: 1px solid var(--border-color);
-  color: var(--text-primary);
-  border-radius: var(--radius-sm);
-}
+.backup-actions { display: flex; gap: 10px; }
 
-.audit-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 12px;
-}
+table { font-size: 13px; }
+.time-col { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+.target-col { color: var(--text-secondary); font-size: 12px; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.audit-table th {
-  text-align: left;
-  padding: 6px 8px;
-  border-bottom: 1px solid var(--border-color);
-  color: var(--text-secondary);
-  font-size: 11px;
-}
-
-.audit-table td { padding: 6px 8px; border-bottom: 1px solid var(--bg-page); }
-
-.action-bar { margin-top: 24px; }
-
-.save-btn {
-  padding: 10px 24px;
-  background: var(--accent);
-  color: #fff;
-  font-weight: 500;
-}
+.save-bar { margin-top: 24px; }
 </style>
