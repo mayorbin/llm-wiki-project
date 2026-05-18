@@ -14,7 +14,8 @@ const settings = ref<any>(null)
 const loading = ref(false)
 const saved = ref(false)
 const auditLog = ref<any[]>([])
-const auditLoading = ref(true)
+const auditLoading = ref(false)
+const auditLoaded = ref(false)
 const auditError = ref('')
 const showImport = ref(false)
 
@@ -33,6 +34,7 @@ async function saveSettings() {
 }
 
 async function loadAuditLog() {
+  if (auditLoading.value) return  // 防止重复请求
   auditLoading.value = true
   auditError.value = ''
   try {
@@ -51,6 +53,7 @@ async function loadAuditLog() {
     auditLog.value = []
   } finally {
     auditLoading.value = false
+    auditLoaded.value = true
   }
 }
 
@@ -140,12 +143,18 @@ onMounted(() => { loadSettings(); loadAuditLog() })
     <!-- 审计日志 -->
     <div class="card">
       <h3 class="card-title">操作记录</h3>
+
       <div v-if="auditLoading" style="color:var(--text-muted);font-size:13px;padding:12px 0">加载中...</div>
       <div v-else-if="auditError" style="color:var(--error-text);font-size:13px;padding:12px 0">
         {{ auditError }}
         <button class="btn-ghost" style="font-size:12px;margin-left:8px;padding:2px 8px" @click="loadAuditLog()">重试</button>
       </div>
-      <div v-else-if="auditLog.length === 0" style="color:var(--text-muted);font-size:13px;padding:12px 0">暂无操作记录</div>
+      <div v-else-if="!auditLoaded || auditLog.length === 0" style="padding:12px 0">
+        <template v-if="!auditLoaded">
+          <button class="btn-ghost" style="font-size:12px;padding:4px 12px" @click="loadAuditLog()">加载操作记录</button>
+        </template>
+        <span v-else style="color:var(--text-muted);font-size:13px">暂无操作记录</span>
+      </div>
       <table v-else>
         <thead><tr><th>时间</th><th>操作</th><th>用户</th><th>目标</th></tr></thead>
         <tbody>
