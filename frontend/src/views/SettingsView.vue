@@ -13,8 +13,8 @@ const projectId = route.params.projectId as string
 const settings = ref<any>(null)
 const loading = ref(false)
 const saved = ref(false)
-const auditLog = ref<any[] | null>(null)
-const auditLoading = ref(false)
+const auditLog = ref<any[]>([])
+const auditLoading = ref(true)
 const auditError = ref('')
 const showImport = ref(false)
 
@@ -33,13 +33,22 @@ async function saveSettings() {
 async function loadAuditLog() {
   auditLoading.value = true
   auditError.value = ''
+  // 兜底：5 秒后无论如何结束 loading 状态
+  const fallback = setTimeout(() => {
+    if (auditLoading.value) {
+      auditLoading.value = false
+      auditError.value = '请求超时'
+    }
+  }, 5000)
   try {
     const res = await maintenanceApi.getAuditLog(projectId, 50)
     auditLog.value = res.data?.entries || []
   } catch (e: any) {
-    auditError.value = e.response?.status === 403 ? '无权限查看操作记录' : '加载失败'
-    auditLog.value = []
+    if (e?.code !== 'ERR_CANCELED') {
+      auditError.value = e.response?.status === 403 ? '无权限查看操作记录' : '加载失败'
+    }
   } finally {
+    clearTimeout(fallback)
     auditLoading.value = false
   }
 }
@@ -133,9 +142,9 @@ onMounted(() => { loadSettings(); loadAuditLog() })
       <div v-if="auditLoading" style="color:var(--text-muted);font-size:13px;padding:12px 0">加载中...</div>
       <div v-else-if="auditError" style="color:var(--error-text);font-size:13px;padding:12px 0">
         {{ auditError }}
-        <button class="btn-ghost" style="font-size:12px;margin-left:8px;padding:2px 8px" @click="loadAuditLog">重试</button>
+        <button class="btn-ghost" style="font-size:12px;margin-left:8px;padding:2px 8px" @click="loadAuditLog()">重试</button>
       </div>
-      <div v-else-if="!auditLog || auditLog.length === 0" style="color:var(--text-muted);font-size:13px;padding:12px 0">暂无操作记录</div>
+      <div v-else-if="auditLog.length === 0" style="color:var(--text-muted);font-size:13px;padding:12px 0">暂无操作记录</div>
       <table v-else>
         <thead><tr><th>时间</th><th>操作</th><th>用户</th><th>目标</th></tr></thead>
         <tbody>
