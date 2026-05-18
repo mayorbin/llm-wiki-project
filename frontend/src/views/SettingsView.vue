@@ -22,7 +22,8 @@ async function loadSettings() {
   loading.value = true
   try {
     const res = await projectsApi.getSettings(projectId)
-    settings.value = res.data
+    // 后端返回 {project_id, settings: {...}, updated_at}，只取 settings 字段
+    settings.value = res.data?.settings || { llm: {}, features: {} }
   } catch (e) {
     console.error('加载设置失败:', e)
   } finally {
