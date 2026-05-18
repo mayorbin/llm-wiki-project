@@ -177,7 +177,7 @@ const features = [
 
 <style scoped>
 .home-page { min-height: 100vh; display: flex; justify-content: center; background: radial-gradient(ellipse 60% 50% at 50% -10%, rgba(217,119,6,0.04), transparent), var(--bg-page); padding: 48px 24px 80px; }
-.home-container { width: 100%; max-width: 720px; }
+.home-container { width: 100%; max-width: 960px; }
 
 .home-header { text-align: center; margin-bottom: 44px; }
 .hero-logo { width: 56px; height: 56px; margin-bottom: 18px; }

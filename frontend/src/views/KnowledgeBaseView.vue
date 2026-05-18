@@ -202,7 +202,7 @@ watch(currentDir, loadDir)
 </template>
 
 <style scoped>
-.kb-page { max-width: 960px; }
+.kb-page { width: 100%; }
 
 .tab-bar { display: flex; gap: 2px; margin-bottom: 20px; background: var(--bg-subtle); border-radius: var(--radius); padding: 3px; width: fit-content; }
 .tab-bar button { padding: 7px 20px; background: transparent; color: var(--text-secondary); border-radius: var(--radius-sm); font-size: 13px; font-weight: 500; transition: all var(--transition); }
@@ -238,7 +238,7 @@ watch(currentDir, loadDir)
 .size-col { color: var(--text-muted); font-size: 13px; }
 .action-col { text-align: right; }
 
-.query-area { max-width: 740px; }
+.query-area { width: 100%; }
 .query-input-row { display: flex; gap: 10px; margin-bottom: 16px; }
 .query-input { flex: 1; padding: 12px 16px; font-size: 15px; }
 .query-result { font-size: 15px; line-height: 1.75; }

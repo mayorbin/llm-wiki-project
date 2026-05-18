@@ -132,7 +132,7 @@ watch([showSource, showEntity, showConcept, showExtracted, showInferred], () => 
 </template>
 
 <style scoped>
-.graph-page { max-width: 1080px; }
+.graph-page { width: 100%; }
 .graph-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
 
 h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; margin-bottom: 2px; }

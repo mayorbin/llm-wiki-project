@@ -147,7 +147,7 @@ onMounted(() => { loadSettings(); loadAuditLog() })
 </template>
 
 <style scoped>
-.settings-page { max-width: 760px; padding-bottom: 40px; }
+.settings-page { width: 100%; padding-bottom: 40px; }
 
 h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; margin-bottom: 22px; }
 
