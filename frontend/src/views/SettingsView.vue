@@ -5,7 +5,6 @@
 import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { projectsApi } from '@/api/projects'
-import { maintenanceApi } from '@/api/maintenance'
 
 const route = useRoute()
 const projectId = route.params.projectId as string
@@ -22,7 +21,11 @@ async function loadSettings() {
   loading.value = true
   try {
     const res = await projectsApi.getSettings(projectId)
-    settings.value = res.data?.settings || { llm: {}, features: {} }
+    const s = res.data?.settings || {}
+    settings.value = {
+      llm: { model: s.llm?.model || '', api_base: s.llm?.api_base || '', temperature: s.llm?.temperature ?? 0.3, max_tokens: s.llm?.max_tokens ?? 8192 },
+      features: { auto_ingest_on_upload: s.features?.auto_ingest_on_upload ?? true, auto_graph_rebuild: s.features?.auto_graph_rebuild ?? true },
+    }
   } catch { /* ignore */ }
   finally { loading.value = false }
 }
@@ -38,23 +41,40 @@ async function loadAuditLog() {
   auditStatus.value = 'loading'
   auditError.value = ''
   try {
-    const res = await maintenanceApi.getAuditLog(projectId, 50)
-    auditLog.value = res.data?.entries || []
+    const token = localStorage.getItem('access_token')
+    const url = `/api/audit-log?project_id=${encodeURIComponent(projectId)}&limit=50`
+    const res = await fetch(url, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (!res.ok) {
+      auditStatus.value = 'error'
+      auditError.value = res.status === 403 ? '无权限查看操作记录' : `请求失败 (${res.status})`
+      auditLog.value = []
+      return
+    }
+    const data = await res.json()
+    auditLog.value = data.entries || []
     auditStatus.value = 'loaded'
-  } catch (e: any) {
+  } catch {
     auditStatus.value = 'error'
-    auditError.value = e?.response?.status === 403 ? '无权限查看操作记录' : '加载失败'
+    auditError.value = '网络请求失败'
     auditLog.value = []
   }
 }
 
 async function handleExport() {
-  try {
-    const res = await maintenanceApi.exportBackup(projectId)
-    const url = window.URL.createObjectURL(new Blob([res.data]))
+  const token = localStorage.getItem('access_token')
+  const res = await fetch(`/api/backup/export`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify({ project_id: projectId }),
+  })
+  if (res.ok) {
+    const blob = await res.blob()
+    const url = window.URL.createObjectURL(blob)
     const a = document.createElement('a'); a.href = url; a.download = `backup-${projectId}-${Date.now()}.tar.gz`; a.click()
     window.URL.revokeObjectURL(url)
-  } catch { /* ignore */ }
+  }
 }
 
 onMounted(() => { loadSettings(); loadAuditLog() })
