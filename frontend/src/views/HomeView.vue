@@ -10,6 +10,7 @@ const projectName = ref('')
 const projectDesc = ref('')
 const creating = ref(false)
 const error = ref('')
+const showCreate = ref(false)
 const projects = computed(() => auth.projects || [])
 
 function goToProject(id: string) { router.push(`/${id}`) }
@@ -92,8 +93,15 @@ const features = [
 
       <!-- 创建 -->
       <div class="section">
-        <h3>创建新项目</h3>
-        <div class="create-card">
+        <div v-if="!showCreate" class="create-toggle" @click="showCreate = true">
+          <svg viewBox="0 0 20 20" fill="currentColor" width="16"><path d="M10 4v12M4 10h12" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+          新建项目
+        </div>
+        <div v-else class="create-card">
+          <div class="create-card-header">
+            <h3>创建新项目</h3>
+            <button class="btn-ghost" style="font-size:12px;padding:4px 8px" @click="showCreate = false">收起</button>
+          </div>
           <div v-if="error" class="error-msg">{{ error }}</div>
           <div class="create-fields">
             <input v-model="projectName" placeholder="项目名称" :disabled="creating" class="name-input" @keyup.enter="createProject" />

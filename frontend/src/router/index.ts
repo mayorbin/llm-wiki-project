@@ -83,15 +83,15 @@ router.beforeEach(async (to) => {
     // 无项目则留在首页（显示引导创建页面）
   }
 
-  // 检查目标 projectId 是否有效
+  // 检查目标 projectId 是否有效，同时保存 last_project
   const targetProjectId = to.params.projectId as string | undefined
   if (targetProjectId && auth.isAuthenticated) {
     const projects = auth.projects || []
-    // 排除 default 和无效 ID
     if (targetProjectId === 'default' || !projects.some((p: any) => p.id === targetProjectId)) {
-      // 无效项目 ID → 回到首页
       return '/'
     }
+    // 每次进入有效项目时自动记录，下次登录直接跳转
+    localStorage.setItem('last_project', targetProjectId)
   }
 
   return true
