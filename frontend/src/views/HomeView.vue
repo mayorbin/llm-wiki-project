@@ -12,8 +12,31 @@ const creating = ref(false)
 const error = ref('')
 const showCreate = ref(false)
 const projects = computed(() => auth.projects || [])
+const deleteTarget = ref<any>(null)
+const deleting = ref(false)
+const deleteError = ref('')
 
 function goToProject(id: string) { router.push(`/${id}`) }
+
+async function confirmDelete(project: any) {
+  deleteTarget.value = project
+  deleteError.value = ''
+}
+
+async function executeDelete() {
+  if (!deleteTarget.value) return
+  deleting.value = true
+  deleteError.value = ''
+  try {
+    await projectsApi.delete(deleteTarget.value.id)
+    await auth.initialize()
+    deleteTarget.value = null
+  } catch (e: any) {
+    deleteError.value = e.response?.data?.detail || '删除失败'
+  } finally {
+    deleting.value = false
+  }
+}
 
 async function createProject() {
   if (!projectName.value.trim()) return
@@ -77,7 +100,7 @@ const features = [
       <div v-if="projects.length > 0" class="section">
         <h3>你的项目</h3>
         <div class="project-grid">
-          <button v-for="p in projects" :key="p.id" class="project-card" @click="goToProject(p.id)">
+          <div v-for="p in projects" :key="p.id" class="project-card" @click="goToProject(p.id)">
             <div class="project-card-top">
               <span class="project-initial">{{ p.name[0] }}</span>
               <div>
@@ -85,9 +108,20 @@ const features = [
                 <div class="project-card-role">{{ p.role === 'owner' ? 'Owner' : p.role === 'editor' ? 'Editor' : 'Viewer' }}</div>
               </div>
             </div>
-            <span v-if="p.status === 'archived'" class="badge badge-warning">已归档</span>
-            <svg v-else class="chevron" viewBox="0 0 20 20" fill="currentColor" width="18"><path d="M7 4l8 6-8 6" stroke="currentColor" stroke-width="2" fill="none"/></svg>
-          </button>
+            <div class="project-card-right">
+              <span v-if="p.status === 'archived'" class="badge badge-warning">已归档</span>
+              <svg v-else class="chevron" viewBox="0 0 20 20" fill="currentColor" width="18"><path d="M7 4l8 6-8 6" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+              <!-- 仅 owner 可删除 -->
+              <button
+                v-if="p.role === 'owner'"
+                class="delete-icon"
+                title="删除项目"
+                @click.stop="confirmDelete(p)"
+              >
+                <svg viewBox="0 0 20 20" fill="currentColor" width="14"><path d="M6 4h8v1H6zM7 6h6l-.5 10h-5L7 6zM8 3h4v1H8z" fill-rule="evenodd"/></svg>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -112,6 +146,24 @@ const features = [
           </div>
         </div>
       </div>
+
+    <!-- 删除确认 -->
+    <div v-if="deleteTarget" class="modal-overlay" @click.self="deleteTarget = null">
+      <div class="modal">
+        <div class="modal-header">确认删除项目</div>
+        <div class="modal-body">
+          <p>确定要删除 <strong>{{ deleteTarget.name }}</strong> 吗？</p>
+          <p class="delete-warning">此操作将删除项目下的所有 Wiki 页面、源文件和图谱数据，且不可撤销。</p>
+          <div v-if="deleteError" class="error-msg" style="margin-top:10px">{{ deleteError }}</div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn-secondary" @click="deleteTarget = null" :disabled="deleting">取消</button>
+          <button class="btn-danger" @click="executeDelete" :disabled="deleting">
+            {{ deleting ? '删除中...' : '确认删除' }}
+          </button>
+        </div>
+      </div>
+    </div>
 
       <div class="home-footer">
         <span>{{ auth.user?.username }}</span>
@@ -151,7 +203,7 @@ h1 { font-size: 30px; font-weight: 750; letter-spacing: -0.8px; margin-bottom: 8
   display: flex; align-items: center; justify-content: space-between;
   width: 100%; padding: 14px 18px; background: var(--bg-card); border: 1px solid var(--border);
   border-radius: var(--radius); text-align: left; box-shadow: var(--shadow-xs);
-  transition: all var(--transition);
+  transition: all var(--transition); cursor: pointer;
 }
 .project-card:hover { border-color: var(--accent); box-shadow: var(--shadow-sm); transform: translateX(2px); }
 
@@ -159,7 +211,18 @@ h1 { font-size: 30px; font-weight: 750; letter-spacing: -0.8px; margin-bottom: 8
 .project-initial { width: 36px; height: 36px; border-radius: var(--radius-sm); background: var(--accent-light); color: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 16px; font-weight: 700; }
 .project-card-name { font-size: 15px; font-weight: 600; line-height: 1.3; }
 .project-card-role { font-size: 12px; color: var(--text-muted); }
+.project-card-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .chevron { color: var(--text-muted); flex-shrink: 0; }
+
+.delete-icon {
+  padding: 6px; background: transparent; color: var(--text-muted);
+  border-radius: var(--radius-sm); opacity: 0;
+  transition: all var(--transition);
+}
+.project-card:hover .delete-icon { opacity: 1; }
+.delete-icon:hover { color: #DC2626; background: var(--error-bg); }
+
+.delete-warning { font-size: 12.5px; color: var(--error-text); margin-top: 8px; }
 
 .create-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 24px; box-shadow: var(--shadow-xs); }
 .create-fields { display: flex; gap: 10px; }
