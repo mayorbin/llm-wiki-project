@@ -14,7 +14,7 @@ llm:
   extra_headers: {}
 
 service:
-  host: "0.0.0.0"
+  host: "127.0.0.1"    # 本地开发用 127.0.0.1，部署时按需改为内网 IP
   port: 8000
   workers: 4
   secret_key: "${LLM_WIKI_SECRET_KEY}"

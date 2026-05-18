@@ -8,7 +8,7 @@ FastAPI 应用入口。
 3. 恢复未完成的任务
 4. 注册路由和中间件
 
-启动方式：uvicorn app.main:app --host 0.0.0.0 --port 8000
+启动方式：uvicorn app.main:app --host 127.0.0.1 --port 8000
 """
 
 from pathlib import Path
