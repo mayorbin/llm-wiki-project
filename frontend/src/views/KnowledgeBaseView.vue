@@ -23,7 +23,6 @@ const deleteTarget = ref<any>(null)
 const showDeleteConfirm = ref(false)
 const uploading = ref(false)
 const dragOver = ref(false)
-const pageStats = ref({ files: 0, pages: 0, lastIngest: '' })
 
 async function loadDir() {
   loading.value = true
@@ -34,8 +33,7 @@ async function loadDir() {
     ])
     dirTree.value = dirsRes.data?.directories || []
     fileList.value = filesRes.data?.files || []
-    pageStats.value.files = fileList.value.length
-  } catch (e) { console.error('加载目录失败:', e) }
+  } catch (e) { console.error(e) }
   finally { loading.value = false }
 }
 
@@ -102,65 +100,64 @@ watch(currentDir, loadDir)
 
 <template>
   <div class="kb-page">
-    <!-- 标签栏 -->
     <div class="tab-bar">
       <button :class="{ active: activeTab === 'files' }" @click="activeTab = 'files'">文件管理</button>
       <button :class="{ active: activeTab === 'query' }" @click="activeTab = 'query'">知识查询</button>
     </div>
 
-    <!-- 文件管理 -->
     <template v-if="activeTab === 'files'">
-      <div class="toolbar">
-        <div class="dir-breadcrumb">
-          <span class="bread-item" :class="{ active: currentDir === '' }" @click="currentDir = ''">raw/</span>
+      <div class="fm-toolbar">
+        <div class="fm-path">
+          <svg class="fm-path-icon" viewBox="0 0 20 20" fill="currentColor" width="15"><path d="M2 5a2 2 0 012-2h3.6c.4 0 .8.2 1 .5L10 5h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V5z"/></svg>
+          <span class="fm-path-item" :class="{ on: currentDir === '' }" @click="currentDir = ''">全部文件</span>
           <template v-if="currentDir">
-            <span class="bread-sep">/</span>
-            <span class="bread-item active">{{ currentDir }}</span>
+            <span class="fm-path-arrow">›</span>
+            <span class="fm-path-item on">{{ currentDir }}</span>
           </template>
         </div>
-        <div class="toolbar-actions">
-          <label class="btn-ghost upload-label">
-            <svg viewBox="0 0 20 20" fill="currentColor" width="16"><path d="M3 15a2 2 0 002 2h10a2 2 0 002-2M12 3l4 4-4 4M16 7H6"/></svg>
+        <div class="fm-actions">
+          <span class="fm-count" v-if="fileList.length">{{ fileList.length }} 个文件</span>
+          <label class="btn-primary btn-sm">
+            <svg viewBox="0 0 20 20" fill="currentColor" width="15"><path d="M10 3v12M4 10h12" stroke="currentColor" stroke-width="2" fill="none"/></svg>
             上传文件
             <input type="file" multiple hidden @change="handleUpload" :disabled="uploading" />
           </label>
         </div>
       </div>
 
-      <!-- 目录标签 -->
-      <div class="dir-tags" v-if="dirTree.length > 0">
-        <span class="dir-tags-label">目录：</span>
-        <button
-          v-for="d in dirTree" :key="d"
-          class="dir-tag" :class="{ active: currentDir === d }"
-          @click="currentDir = d"
-        >{{ d }}</button>
-      </div>
-
-      <div class="files-card" :class="{ drag: dragOver }" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop">
-        <div class="file-area">
-          <div v-if="fileList.length === 0 && !loading" class="empty-state">
-            <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.25">
-              <path d="M12 10h24l8 10v34a2 2 0 01-2 2H12a2 2 0 01-2-2V12a2 2 0 012-2z"/>
-              <line x1="16" y1="22" x2="40" y2="22"/><line x1="16" y1="28" x2="32" y2="28"/>
-            </svg>
-            <h3>此目录为空</h3>
-            <p>拖拽文件到此处或点击上传按钮</p>
+      <div class="fm-body">
+        <nav class="fm-sidebar" v-if="dirTree.length > 0">
+          <div class="fm-sidebar-label">目录</div>
+          <div
+            v-for="d in dirTree" :key="d"
+            class="fm-sidebar-item" :class="{ active: currentDir === d }"
+            @click="currentDir = d"
+          >
+            <svg viewBox="0 0 20 20" fill="currentColor" width="14"><path d="M2 5a2 2 0 012-2h3.6c.4 0 .8.2 1 .5L10 5h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V5z"/></svg>
+            {{ d }}
           </div>
+        </nav>
 
+        <div class="fm-main" :class="{ drag: dragOver }" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop">
+          <div v-if="fileList.length === 0 && !loading" class="empty-state">
+            <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="1.2" opacity="0.2" width="48">
+              <path d="M8 6h18l6 8v28a2 2 0 01-2 2H8a2 2 0 01-2-2V8a2 2 0 012-2z"/>
+            </svg>
+            <p>目录为空，拖拽文件或点击上传</p>
+          </div>
           <table v-else>
-            <thead><tr><th>文件</th><th>大小</th><th style="width:80px"></th></tr></thead>
+            <thead><tr><th>文件名</th><th>大小</th><th></th></tr></thead>
             <tbody>
               <tr v-for="f in fileList" :key="f.id || f.file_id">
                 <td>
                   <div class="file-cell">
-                    <span class="file-icon">{{ getFileIcon(f.filename || f.name || '') }}</span>
+                    <span class="file-icon" :class="(f.filename||f.name||'').split('.').pop()?.toLowerCase()">{{ getFileIcon(f.filename || f.name || '') }}</span>
                     <span class="file-name">{{ f.filename || f.name }}</span>
                   </div>
                 </td>
                 <td class="size-col">{{ formatSize(f.size_bytes || f.size) }}</td>
                 <td class="action-col">
-                  <button class="btn-ghost" style="font-size:12px;padding:4px 8px" @click="confirmDelete(f)" title="删除">
+                  <button class="btn-ghost" style="padding:4px 6px" @click="confirmDelete(f)" title="删除">
                     <svg viewBox="0 0 20 20" fill="currentColor" width="14"><path d="M6 4h8v1H6zM7 6h6l-.5 10h-5L7 6zM8 3h4v1H8z" fill-rule="evenodd"/></svg>
                   </button>
                 </td>
@@ -171,26 +168,20 @@ watch(currentDir, loadDir)
       </div>
     </template>
 
-    <!-- 知识查询 -->
     <template v-if="activeTab === 'query'">
       <div class="query-area">
         <div class="query-input-row">
           <input v-model="queryText" placeholder="输入问题，例如：这些文档的核心主题是什么？" @keyup.enter="handleQuery" class="query-input" />
-          <button class="btn-primary" :disabled="queryLoading" @click="handleQuery">
-            {{ queryLoading ? '查询中...' : '查询' }}
-          </button>
+          <button class="btn-primary" :disabled="queryLoading" @click="handleQuery">{{ queryLoading ? '查询中...' : '查询' }}</button>
         </div>
         <div v-if="queryResult" class="query-result card" v-html="renderMarkdown(queryResult, projectId)" />
       </div>
     </template>
 
-    <!-- 删除确认 -->
     <div v-if="showDeleteConfirm" class="modal-overlay" @click.self="showDeleteConfirm = false">
       <div class="modal">
         <div class="modal-header">确认删除</div>
-        <div class="modal-body">
-          <p>删除 <strong>{{ deleteTarget?.filename || deleteTarget?.name }}</strong> 将级联删除关联的 Wiki 页面，且不可撤销。</p>
-        </div>
+        <div class="modal-body"><p>删除 <strong>{{ deleteTarget?.filename || deleteTarget?.name }}</strong> 将级联删除关联的 Wiki 页面，且不可撤销。</p></div>
         <div class="modal-footer">
           <button class="btn-secondary" @click="showDeleteConfirm = false">取消</button>
           <button class="btn-danger" @click="executeDelete">确认删除</button>
@@ -207,37 +198,61 @@ watch(currentDir, loadDir)
 .tab-bar button { padding: 7px 20px; background: transparent; color: var(--text-secondary); border-radius: var(--radius-sm); font-size: 13px; font-weight: 500; transition: all var(--transition); }
 .tab-bar button.active { background: var(--bg-card); color: var(--text-primary); font-weight: 600; box-shadow: var(--shadow-xs); }
 
-.toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
-.dir-breadcrumb { display: flex; align-items: center; gap: 4px; font-size: 14px; }
-.bread-item { color: var(--text-muted); cursor: pointer; padding: 2px 6px; border-radius: 4px; transition: all var(--transition); }
-.bread-item:hover { color: var(--text-primary); background: var(--bg-subtle); }
-.bread-item.active { color: var(--text-primary); font-weight: 600; }
-.bread-sep { color: var(--text-muted); font-size: 12px; }
-.upload-label { cursor: pointer; }
+/* toolbar */
+.fm-toolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 0; padding: 10px 18px; background: var(--bg-card); border: 1px solid var(--border); border-bottom: none; border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+.fm-path { display: flex; align-items: center; gap: 4px; }
+.fm-path-icon { color: var(--text-muted); margin-right: 2px; }
+.fm-path-item { font-size: 13px; color: var(--text-muted); cursor: pointer; padding: 3px 8px; border-radius: var(--radius-sm); transition: all var(--transition); }
+.fm-path-item:hover { color: var(--text-primary); background: var(--bg-subtle); }
+.fm-path-item.on { color: var(--text-primary); font-weight: 600; }
+.fm-path-arrow { color: var(--text-muted); font-size: 16px; }
 
-.dir-tags { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
-.dir-tags-label { font-size: 12px; color: var(--text-muted); font-weight: 500; }
-.dir-tag { padding: 4px 12px; border-radius: 100px; font-size: 12px; font-weight: 500; background: var(--bg-subtle); color: var(--text-secondary); border: 1px solid transparent; transition: all var(--transition); }
-.dir-tag:hover { background: var(--bg-card); border-color: var(--border); color: var(--text-primary); }
-.dir-tag.active { background: var(--accent-light); color: var(--accent); font-weight: 600; border-color: transparent; }
+.fm-actions { display: flex; align-items: center; gap: 12px; }
+.fm-count { font-size: 12px; color: var(--text-muted); }
+.btn-sm { padding: 6px 14px; font-size: 13px; }
 
-.files-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-xs); overflow: hidden; min-height: 340px; transition: border-color var(--transition); }
-.files-card.drag { border-color: var(--accent); border-style: dashed; }
+/* body */
+.fm-body { display: flex; background: var(--bg-card); border: 1px solid var(--border); border-top: none; border-radius: 0 0 var(--radius-lg) var(--radius-lg); min-height: 400px; overflow: hidden; }
 
-.file-area { padding: 16px 20px; min-width: 0; }
+.fm-sidebar { width: 180px; border-right: 1px solid var(--border-light); padding: 14px 0; flex-shrink: 0; }
+.fm-sidebar-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; padding: 0 14px 8px; }
+.fm-sidebar-item {
+  display: flex; align-items: center; gap: 7px; padding: 7px 14px;
+  font-size: 13px; color: var(--text-secondary); cursor: pointer; transition: all var(--transition);
+}
+.fm-sidebar-item:hover { background: var(--bg-subtle); color: var(--text-primary); }
+.fm-sidebar-item.active { background: var(--accent-light); color: var(--accent); font-weight: 600; }
+.fm-sidebar-item svg { color: var(--text-muted); flex-shrink: 0; }
+.fm-sidebar-item.active svg { color: var(--accent); }
+
+.fm-main { flex: 1; padding: 0; min-width: 0; transition: border-color var(--transition); }
+.fm-main.drag { background: var(--accent-light); }
+
+.empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 80px 32px; text-align: center; color: var(--text-muted); }
+.empty-state p { font-size: 14px; margin-top: 14px; }
+
+table { width: 100%; border-collapse: collapse; }
+thead th { text-align: left; padding: 10px 18px; border-bottom: 2px solid var(--border); color: var(--text-muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+tbody td { padding: 11px 18px; border-bottom: 1px solid var(--border-light); }
+tbody tr:hover { background: var(--bg-subtle); }
+tbody tr:last-child td { border-bottom: none; }
 
 .file-cell { display: flex; align-items: center; gap: 10px; }
 .file-icon {
-  width: 32px; height: 32px; border-radius: var(--radius-sm); background: var(--bg-subtle);
-  display: flex; align-items: center; justify-content: center; font-size: 10px;
-  font-weight: 700; color: var(--text-muted); flex-shrink: 0;
+  width: 32px; height: 32px; border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 10px; font-weight: 800; flex-shrink: 0;
+  background: var(--bg-subtle); color: var(--text-muted);
 }
+.file-icon.pdf { background: #FEF2F2; color: #DC2626; }
+.file-icon.md { background: #F0FDF4; color: #16A34A; }
+.file-icon.docx { background: #EFF6FF; color: #2563EB; }
+.file-icon.pptx { background: #FFF7ED; color: #EA580C; }
 .file-name { font-weight: 500; font-size: 14px; }
-
 .size-col { color: var(--text-muted); font-size: 13px; }
 .action-col { text-align: right; }
 
-.query-area { width: 100%; }
+.query-area { width: 100%; max-width: 780px; }
 .query-input-row { display: flex; gap: 10px; margin-bottom: 16px; }
 .query-input { flex: 1; padding: 12px 16px; font-size: 15px; }
 .query-result { font-size: 15px; line-height: 1.75; }
@@ -245,6 +260,4 @@ watch(currentDir, loadDir)
 .query-result :deep(p) { margin-bottom: 10px; }
 .query-result :deep(a) { color: var(--accent); }
 .query-result :deep(blockquote) { border-left: 2.5px solid var(--accent); padding-left: 14px; color: var(--text-secondary); margin: 10px 0; }
-.query-result :deep(code) { font-size: 12.5px; }
-.query-result :deep(pre) { margin: 10px 0; }
 </style>
