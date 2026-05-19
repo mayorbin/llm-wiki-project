@@ -93,7 +93,13 @@ onMounted(() => { loadSettings(); loadAuditLog() })
 
 <template>
   <div class="settings-page">
-    <h2>项目设置</h2>
+    <div class="page-header">
+      <h2>项目设置</h2>
+      <button class="btn-primary" :disabled="loading" @click="saveSettings">
+        <template v-if="saved">&#10003; 已保存</template>
+        <template v-else>保存设置</template>
+      </button>
+    </div>
 
     <div class="card" style="margin-bottom:18px" v-if="settings">
       <h3 class="card-title">LLM 参数</h3>
@@ -141,12 +147,6 @@ onMounted(() => { loadSettings(); loadAuditLog() })
             <div class="toggle-desc">摄入完成后自动重新计算知识图谱</div>
           </div>
         </label>
-      </div>
-      <div class="save-bar">
-        <button class="btn-primary" :disabled="loading" @click="saveSettings">
-          <template v-if="saved">&#10003; 已保存</template>
-          <template v-else>保存设置</template>
-        </button>
       </div>
     </div>
 
@@ -202,7 +202,8 @@ onMounted(() => { loadSettings(); loadAuditLog() })
 <style scoped>
 .settings-page { width: 100%; padding-bottom: 40px; }
 
-h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; margin-bottom: 22px; }
+.page-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; }
+.page-header h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; margin: 0; }
 
 .card-title { font-size: 15px; font-weight: 650; margin-bottom: 4px; }
 .card-desc { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; }
