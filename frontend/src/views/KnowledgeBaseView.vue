@@ -27,19 +27,32 @@ const dragOver = ref(false)
 // 展开状态：默认展开根目录（path='' 即"全部文件"）
 const expandedDirs = ref<Set<string>>(new Set(['']))
 
-// 扁平化目录列表：始终包含"全部文件"根节点，其下为子目录
-const flatDirs = computed(() => {
-  const result: { name: string; path: string; depth: number; hasChildren: boolean }[] = []
-  const rootHasChildren = dirTree.value.some((n: any) => n.type === 'directory')
-  result.push({ name: '全部文件', path: '', depth: 0, hasChildren: rootHasChildren })
+interface TreeNode {
+  name: string
+  path: string
+  depth: number
+  isFile: boolean
+  ext?: string
+  hasChildren?: boolean
+}
+
+// 扁平化文件树：根节点 + 子目录 + 文件
+const flatTree = computed(() => {
+  const result: TreeNode[] = []
+  const total = dirTree.value.length
+  result.push({ name: '全部文件', path: '', depth: 0, isFile: false, hasChildren: total > 0 })
   if (expandedDirs.value.has('')) {
     function walk(nodes: any[], depth: number) {
       for (const n of nodes) {
-        if (n.type !== 'directory') continue
-        const hasChildren = (n.children || []).some((c: any) => c.type === 'directory')
-        result.push({ name: n.name, path: n.path, depth, hasChildren })
-        if (expandedDirs.value.has(n.path)) {
-          walk(n.children || [], depth + 1)
+        if (n.type === 'directory') {
+          const hasChildren = (n.children || []).length > 0
+          result.push({ name: n.name, path: n.path, depth, isFile: false, hasChildren })
+          if (expandedDirs.value.has(n.path)) {
+            walk(n.children || [], depth + 1)
+          }
+        } else {
+          const ext = ((n.name || '') as string).split('.').pop()?.toLowerCase() || ''
+          result.push({ name: n.name, path: n.path, depth, isFile: true, ext })
         }
       }
     }
@@ -162,25 +175,33 @@ watch(currentDir, loadDir)
 
       <div class="fm-body">
         <nav class="fm-sidebar">
-          <div class="fm-sidebar-label">目录</div>
+          <div class="fm-sidebar-label">文件</div>
           <div
-            v-for="d in flatDirs"
-            :key="d.path"
+            v-for="d in flatTree"
+            :key="d.path || 'root'"
             class="tree-node"
-            :class="{ active: currentDir === d.path, root: d.depth === 0 }"
+            :class="{
+              active: !d.isFile && currentDir === d.path,
+              'tree-file': d.isFile,
+            }"
             :style="{ paddingLeft: (d.depth * 14 + 11) + 'px' }"
-            @click="currentDir = d.path"
+            @click="!d.isFile && (currentDir = d.path)"
           >
+            <!-- 箭頭：仅目录/根节点展示 -->
             <span
-              v-if="d.hasChildren"
+              v-if="!d.isFile && d.hasChildren"
               class="tree-chevron"
               :class="{ expanded: expandedDirs.has(d.path) }"
-              @click.stop="toggleDir(d.path)"
+              @click.stop="!d.isFile && toggleDir(d.path)"
             >
               <svg viewBox="0 0 20 20" fill="currentColor" width="12"><path d="M7 5l5 5-5 5" stroke="currentColor" stroke-width="2" fill="none"/></svg>
             </span>
             <span v-else class="tree-chevron-spacer" />
-            <svg class="tree-icon" viewBox="0 0 20 20" fill="currentColor" width="14"><path d="M2 5a2 2 0 012-2h3.6c.4 0 .8.2 1 .5L10 5h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V5z"/></svg>
+
+            <!-- 图标：文件用文档图标，目录用文件夹图标 -->
+            <svg v-if="!d.isFile" class="tree-icon" viewBox="0 0 20 20" fill="currentColor" width="14"><path d="M2 5a2 2 0 012-2h3.6c.4 0 .8.2 1 .5L10 5h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V5z"/></svg>
+            <svg v-else class="tree-file-icon" viewBox="0 0 20 20" fill="currentColor" width="13"><path d="M6 2h5l3 3v12a1 1 0 01-1 1H7a1 1 0 01-1-1V3a1 1 0 011-1z" fill-rule="evenodd"/></svg>
+
             <span class="tree-name">{{ d.name }}</span>
           </div>
         </nav>
@@ -272,10 +293,15 @@ watch(currentDir, loadDir)
   font-size: 13px; color: var(--text-secondary);
   cursor: pointer; transition: all var(--transition); user-select: none;
 }
-.tree-node.root { font-weight: 500; color: var(--text-primary); }
+.tree-node { color: var(--text-secondary); }
 .tree-node:hover { background: var(--bg-subtle); color: var(--text-primary); }
 .tree-node.active { background: var(--accent-light); color: var(--accent); font-weight: 600; }
 .tree-node.active .tree-icon { color: var(--accent); }
+
+/* file nodes: lighter, no action on click */
+.tree-file { cursor: default; color: var(--text-muted); }
+.tree-file:hover { color: var(--text-secondary); }
+
 .tree-chevron {
   display: flex; align-items: center; justify-content: center;
   width: 16px; height: 16px; flex-shrink: 0;
@@ -284,6 +310,7 @@ watch(currentDir, loadDir)
 .tree-chevron.expanded { transform: rotate(90deg); }
 .tree-chevron-spacer { width: 16px; flex-shrink: 0; }
 .tree-icon { color: var(--text-muted); flex-shrink: 0; }
+.tree-file-icon { color: var(--border-strong); flex-shrink: 0; }
 .tree-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .fm-main { flex: 1; padding: 0; min-width: 0; transition: border-color var(--transition); }
