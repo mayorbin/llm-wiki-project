@@ -149,7 +149,7 @@ async def list_files(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/files/{file_id}")
+@router.get("/files/{file_id:path}")
 async def get_file_detail(
     file_id: str,
     project_id: str = Query(description="项目 ID"),
@@ -164,7 +164,7 @@ async def get_file_detail(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.get("/files/{file_id}/download")
+@router.get("/files/{file_id:path}/download")
 async def download_file(
     file_id: str,
     project_id: str = Query(description="项目 ID"),
@@ -184,7 +184,7 @@ async def download_file(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.delete("/files/{file_id}")
+@router.delete("/files/{file_id:path}")
 async def delete_file(
     file_id: str,
     project_id: str = Query(description="项目 ID"),
