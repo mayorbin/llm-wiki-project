@@ -142,6 +142,12 @@ onMounted(() => { loadSettings(); loadAuditLog() })
           </div>
         </label>
       </div>
+      <div class="save-bar">
+        <button class="btn-primary" :disabled="loading" @click="saveSettings">
+          <template v-if="saved">&#10003; 已保存</template>
+          <template v-else>保存设置</template>
+        </button>
+      </div>
     </div>
 
     <div class="card" style="margin-bottom:18px">
@@ -190,12 +196,6 @@ onMounted(() => { loadSettings(); loadAuditLog() })
       </table>
     </div>
 
-    <div class="save-bar">
-      <button class="btn-primary" :disabled="loading" @click="saveSettings">
-        <template v-if="saved">&#10003; 已保存</template>
-        <template v-else>保存设置</template>
-      </button>
-    </div>
   </div>
 </template>
 
@@ -249,5 +249,5 @@ table { font-size: 13px; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 
-.save-bar { margin-top: 24px; }
+.save-bar { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-light); }
 </style>
