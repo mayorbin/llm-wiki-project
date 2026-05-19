@@ -99,13 +99,17 @@ def sanitize_filename(filename: str) -> str:
     处理步骤：
     1. Unicode NFKC 规范化（全角→半角，兼容字符→标准形式）
     2. 剥离路径分隔符（/ 和 \\ 替换为 _）
-    3. 移除不可打印字符
-    4. 去首尾空格和点（Windows 不允许）
-    5. UTF-8 字节长度截断（保留扩展名）
-    6. 空文件名兜底
+    3. 移除 Windows 禁用字符（NFKC 可能将全角符号转为半角禁符）
+    4. 移除不可打印字符
+    5. 去首尾空格和点（Windows 不允许）
+    6. UTF-8 字节长度截断（保留扩展名）
+    7. 空文件名兜底
     """
     filename = unicodedata.normalize("NFKC", filename)
     filename = filename.replace("/", "_").replace("\\", "_")
+    # Windows 文件名禁用字符（NFKC 将全角 ：＂＊？＜＞｜ 等转为半角禁符）
+    for ch in '<>:"|?*':
+        filename = filename.replace(ch, '_')
     filename = re.sub(r"[^\x20-\x7E一-鿿　-〿＀-￯]", "_", filename)
     filename = filename.strip(" .")
 
