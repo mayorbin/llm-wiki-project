@@ -24,23 +24,27 @@ const showDeleteConfirm = ref(false)
 const uploading = ref(false)
 const dragOver = ref(false)
 
-// 展开状态：Set 存放已展开目录的 path
-const expandedDirs = ref<Set<string>>(new Set())
+// 展开状态：默认展开根目录（path='' 即"全部文件"）
+const expandedDirs = ref<Set<string>>(new Set(['']))
 
-// 扁平化目录列表：仅展开的节点显示其子目录
+// 扁平化目录列表：始终包含"全部文件"根节点，其下为子目录
 const flatDirs = computed(() => {
   const result: { name: string; path: string; depth: number; hasChildren: boolean }[] = []
-  function walk(nodes: any[], depth: number) {
-    for (const n of nodes) {
-      if (n.type !== 'directory') continue
-      const hasChildren = (n.children || []).some((c: any) => c.type === 'directory')
-      result.push({ name: n.name, path: n.path, depth, hasChildren })
-      if (expandedDirs.value.has(n.path)) {
-        walk(n.children || [], depth + 1)
+  const rootHasChildren = dirTree.value.some((n: any) => n.type === 'directory')
+  result.push({ name: '全部文件', path: '', depth: 0, hasChildren: rootHasChildren })
+  if (expandedDirs.value.has('')) {
+    function walk(nodes: any[], depth: number) {
+      for (const n of nodes) {
+        if (n.type !== 'directory') continue
+        const hasChildren = (n.children || []).some((c: any) => c.type === 'directory')
+        result.push({ name: n.name, path: n.path, depth, hasChildren })
+        if (expandedDirs.value.has(n.path)) {
+          walk(n.children || [], depth + 1)
+        }
       }
     }
+    walk(dirTree.value, 1)
   }
-  walk(dirTree.value, 0)
   return result
 })
 
@@ -157,31 +161,28 @@ watch(currentDir, loadDir)
       </div>
 
       <div class="fm-body">
-        <nav class="fm-sidebar" v-if="dirTree.length > 0">
+        <nav class="fm-sidebar">
           <div class="fm-sidebar-label">目录</div>
-          <template v-if="flatDirs.length > 0">
-            <div
-              v-for="d in flatDirs"
-              :key="d.path"
-              class="tree-node"
-              :class="{ active: currentDir === d.path }"
-              :style="{ paddingLeft: (d.depth * 14 + 11) + 'px' }"
-              @click="currentDir = d.path"
+          <div
+            v-for="d in flatDirs"
+            :key="d.path"
+            class="tree-node"
+            :class="{ active: currentDir === d.path, root: d.depth === 0 }"
+            :style="{ paddingLeft: (d.depth * 14 + 11) + 'px' }"
+            @click="currentDir = d.path"
+          >
+            <span
+              v-if="d.hasChildren"
+              class="tree-chevron"
+              :class="{ expanded: expandedDirs.has(d.path) }"
+              @click.stop="toggleDir(d.path)"
             >
-              <span
-                v-if="d.hasChildren"
-                class="tree-chevron"
-                :class="{ expanded: expandedDirs.has(d.path) }"
-                @click.stop="toggleDir(d.path)"
-              >
-                <svg viewBox="0 0 20 20" fill="currentColor" width="12"><path d="M7 5l5 5-5 5" stroke="currentColor" stroke-width="2" fill="none"/></svg>
-              </span>
-              <span v-else class="tree-chevron-spacer" />
-              <svg class="tree-icon" viewBox="0 0 20 20" fill="currentColor" width="14"><path d="M2 5a2 2 0 012-2h3.6c.4 0 .8.2 1 .5L10 5h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V5z"/></svg>
-              <span class="tree-name">{{ d.name }}</span>
-            </div>
-          </template>
-          <div v-else class="fm-sidebar-empty">暂无子目录</div>
+              <svg viewBox="0 0 20 20" fill="currentColor" width="12"><path d="M7 5l5 5-5 5" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+            </span>
+            <span v-else class="tree-chevron-spacer" />
+            <svg class="tree-icon" viewBox="0 0 20 20" fill="currentColor" width="14"><path d="M2 5a2 2 0 012-2h3.6c.4 0 .8.2 1 .5L10 5h6a2 2 0 012 2v8a2 2 0 01-2 2H4a2 2 0 01-2-2V5z"/></svg>
+            <span class="tree-name">{{ d.name }}</span>
+          </div>
         </nav>
 
         <div class="fm-main" :class="{ drag: dragOver }" @dragover="onDragOver" @dragleave="onDragLeave" @drop="onDrop">
@@ -261,9 +262,8 @@ watch(currentDir, loadDir)
 /* body */
 .fm-body { display: flex; background: var(--bg-card); border: 1px solid var(--border); border-top: none; border-radius: 0 0 var(--radius-lg) var(--radius-lg); min-height: 400px; overflow: hidden; }
 
-.fm-sidebar { width: 200px; border-right: 1px solid var(--border-light); padding: 14px 0; flex-shrink: 0; overflow-y: auto; }
+.fm-sidebar { width: 200px; min-width: 0; border-right: 1px solid var(--border-light); padding: 14px 0; flex-shrink: 0; overflow-y: auto; }
 .fm-sidebar-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; padding: 0 14px 8px; }
-.fm-sidebar-empty { font-size: 12px; color: var(--text-muted); padding: 4px 14px; }
 
 /* directory tree nodes */
 .tree-node {
@@ -272,6 +272,7 @@ watch(currentDir, loadDir)
   font-size: 13px; color: var(--text-secondary);
   cursor: pointer; transition: all var(--transition); user-select: none;
 }
+.tree-node.root { font-weight: 500; color: var(--text-primary); }
 .tree-node:hover { background: var(--bg-subtle); color: var(--text-primary); }
 .tree-node.active { background: var(--accent-light); color: var(--accent); font-weight: 600; }
 .tree-node.active .tree-icon { color: var(--accent); }
