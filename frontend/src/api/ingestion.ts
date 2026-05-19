@@ -2,8 +2,8 @@
 import client from './client'
 
 export const ingestionApi = {
-  trigger(projectId: string, fileIds: string[]) {
-    return client.post('/ingestion/trigger', { project_id: projectId, file_ids: fileIds })
+  trigger(projectId: string, filePaths: string[]) {
+    return client.post('/ingestion/trigger', { project_id: projectId, file_paths: filePaths, action: 'ingest' })
   },
   retry(taskId: string) {
     return client.post(`/ingestion/retry/${taskId}`)

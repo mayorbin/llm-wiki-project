@@ -5,6 +5,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { filesApi } from '@/api/files'
+import { ingestionApi } from '@/api/ingestion'
 import { knowledgeApi } from '@/api/knowledge'
 import { renderMarkdown } from '@/lib/markdown'
 import { useToast } from '@/composables/useToast'
@@ -41,6 +42,7 @@ const dragOver = ref(false)
 const showNewDir = ref(false)
 const newDirName = ref('')
 const creatingDir = ref(false)
+const ingesting = ref(false)
 const newDirInput = ref<HTMLInputElement | null>(null)
 
 // 展开状态：默认展开根目录（path='' 即"全部文件"）
@@ -111,6 +113,21 @@ async function createDirectory() {
   } catch (e: any) {
     toastError(e.response?.data?.detail || '创建目录失败')
   } finally { creatingDir.value = false }
+}
+
+async function handleIngest() {
+  const paths = fileList.value.map((f: any) => f.path)
+  if (paths.length === 0) {
+    toastError('当前目录没有可摄入的文件')
+    return
+  }
+  ingesting.value = true
+  try {
+    await ingestionApi.trigger(projectId, paths)
+    toastSuccess(`已触发 ${paths.length} 个文件的摄入任务`)
+  } catch (e: any) {
+    toastError(e.response?.data?.detail || '摄入失败')
+  } finally { ingesting.value = false }
 }
 
 function confirmDeleteDir(dirPath: string) {
@@ -282,6 +299,10 @@ watch(showNewDir, (v) => { if (v) setTimeout(() => newDirInput.value?.focus(), 5
           </template>
           <template v-else>
             <span class="fm-count" v-if="fileList.length">{{ fileList.length }} 个文件</span>
+            <button class="btn-secondary btn-sm" :disabled="ingesting" @click="handleIngest" title="摄入文件生成知识页">
+              <svg viewBox="0 0 20 20" fill="currentColor" width="14"><path d="M10 3l6 4-2 1.5L11 7v9H9V7L6 8.5 4 7l6-4z" fill-rule="evenodd"/></svg>
+              {{ ingesting ? '摄入中...' : '摄入' }}
+            </button>
             <label class="btn-primary btn-sm" :title="currentDir ? `上传到 ${currentDir}` : '上传到根目录'">
               <svg viewBox="0 0 20 20" fill="currentColor" width="15"><path d="M10 3v12M4 10h12" stroke="currentColor" stroke-width="2" fill="none"/></svg>
               {{ currentDir ? `上传到 ${currentDir}` : '上传文件' }}
