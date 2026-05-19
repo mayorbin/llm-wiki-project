@@ -11,7 +11,13 @@ import { useToast } from '@/composables/useToast'
 
 const route = useRoute()
 const projectId = route.params.projectId as string
-const { error: toastError } = useToast()
+const { error: toastError, success: toastSuccess } = useToast()
+
+function showUploadResult(ok: number, total: number) {
+  if (ok === total && ok > 0) toastSuccess(`成功上传 ${ok} 个文件`)
+  else if (ok > 0) toastSuccess(`成功上传 ${ok} 个文件，${total - ok} 个失败`)
+  else toastError(`${total} 个文件全部上传失败`)
+}
 
 const activeTab = ref<'files' | 'query'>('files')
 const currentDir = ref('')
@@ -26,6 +32,10 @@ const showDeleteConfirm = ref(false)
 const deleteDirTarget = ref<string>('')
 const showDeleteDirConfirm = ref(false)
 const uploading = ref(false)
+const uploadProgress = ref(0)
+const uploadFileName = ref('')
+const uploadFileIndex = ref(0)
+const uploadTotalFiles = ref(0)
 const dragOver = ref(false)
 const showNewDir = ref(false)
 const newDirName = ref('')
@@ -140,22 +150,38 @@ function onDragLeave() { dragOver.value = false }
 async function onDrop(e: DragEvent) {
   e.preventDefault(); dragOver.value = false
   if (!e.dataTransfer?.files.length) return
-  uploading.value = true
-  for (const file of Array.from(e.dataTransfer.files)) {
-    try { await filesApi.uploadFile(projectId, currentDir.value, file) } catch (e) { console.error(e) }
-  }
-  uploading.value = false; loadDir()
+  await uploadFiles(Array.from(e.dataTransfer.files))
 }
 
 async function handleUpload(e: Event) {
   const input = e.target as HTMLInputElement
   if (!input.files?.length) return
-  uploading.value = true
-  for (const file of Array.from(input.files)) {
-    try { await filesApi.uploadFile(projectId, currentDir.value, file) } catch (e) { console.error(e) }
-  }
-  uploading.value = false; loadDir()
+  await uploadFiles(Array.from(input.files))
   input.value = ''
+}
+
+async function uploadFiles(files: File[]) {
+  uploading.value = true
+  uploadTotalFiles.value = files.length
+  uploadProgress.value = 0
+  let ok = 0
+  for (let i = 0; i < files.length; i++) {
+    uploadFileIndex.value = i + 1
+    uploadFileName.value = files[i].name
+    try {
+      await filesApi.uploadFile(projectId, currentDir.value, files[i], (pct) => {
+        uploadProgress.value = pct
+      })
+      ok++
+    } catch (e: any) {
+      toastError(e.response?.data?.detail || `上传失败: ${files[i].name}`)
+    }
+  }
+  uploading.value = false
+  showUploadResult(ok, files.length)
+  uploadFileName.value = ''
+  uploadProgress.value = 0
+  loadDir()
 }
 
 function confirmDelete(file: any) { deleteTarget.value = file; showDeleteConfirm.value = true }
@@ -219,12 +245,20 @@ watch(showNewDir, (v) => { if (v) setTimeout(() => newDirInput.value?.focus(), 5
           </template>
         </div>
         <div class="fm-actions">
-          <span class="fm-count" v-if="fileList.length">{{ fileList.length }} 个文件</span>
-          <label class="btn-primary btn-sm" :title="currentDir ? `上传到 ${currentDir}` : '上传到根目录'">
-            <svg viewBox="0 0 20 20" fill="currentColor" width="15"><path d="M10 3v12M4 10h12" stroke="currentColor" stroke-width="2" fill="none"/></svg>
-            {{ currentDir ? `上传到 ${currentDir}` : '上传文件' }}
-            <input type="file" multiple hidden @change="handleUpload" :disabled="uploading" />
-          </label>
+          <template v-if="uploading">
+            <span class="upload-info">{{ uploadFileName }} {{ uploadFileIndex }}/{{ uploadTotalFiles }}</span>
+            <div class="upload-bar-track">
+              <div class="upload-bar-fill" :style="{ width: uploadProgress + '%' }" />
+            </div>
+          </template>
+          <template v-else>
+            <span class="fm-count" v-if="fileList.length">{{ fileList.length }} 个文件</span>
+            <label class="btn-primary btn-sm" :title="currentDir ? `上传到 ${currentDir}` : '上传到根目录'">
+              <svg viewBox="0 0 20 20" fill="currentColor" width="15"><path d="M10 3v12M4 10h12" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+              {{ currentDir ? `上传到 ${currentDir}` : '上传文件' }}
+              <input type="file" multiple hidden @change="handleUpload" :disabled="uploading" />
+            </label>
+          </template>
         </div>
       </div>
 
@@ -364,9 +398,20 @@ watch(showNewDir, (v) => { if (v) setTimeout(() => newDirInput.value?.focus(), 5
 .fm-path-item.on { color: var(--text-primary); font-weight: 600; }
 .fm-path-arrow { color: var(--text-muted); font-size: 16px; }
 
-.fm-actions { display: flex; align-items: center; gap: 12px; }
+.fm-actions { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .fm-count { font-size: 12px; color: var(--text-muted); }
 .btn-sm { padding: 6px 14px; font-size: 13px; }
+
+/* upload progress */
+.upload-info { font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+.upload-bar-track {
+  width: 140px; height: 6px; border-radius: 100px;
+  background: var(--border); overflow: hidden; flex-shrink: 0;
+}
+.upload-bar-fill {
+  height: 100%; border-radius: 100px;
+  background: var(--accent); transition: width 0.3s ease;
+}
 
 /* body */
 .fm-body { display: flex; background: var(--bg-card); border: 1px solid var(--border); border-top: none; border-radius: 0 0 var(--radius-lg) var(--radius-lg); min-height: 400px; overflow: hidden; }
