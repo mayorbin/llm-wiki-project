@@ -126,7 +126,7 @@ async function executeDelete() {
                 title="删除项目"
                 @click.stop="confirmDelete(p)"
               >
-                <svg viewBox="0 0 16 16" fill="currentColor" width="13"><path d="M5 3h6v1H5zM6 5h4l-.4 8H6.4L6 5zM7 2h2v1H7z" fill-rule="evenodd"/></svg>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="15"><path d="M4 7h16M9 5h6M7 7v11a2 2 0 002 2h6a2 2 0 002-2V7M10 11v4M14 11v4"/></svg>
               </button>
             </div>
 

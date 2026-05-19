@@ -120,7 +120,7 @@ const features = [
                 title="删除项目"
                 @click.stop="confirmDelete(p)"
               >
-                <svg viewBox="0 0 20 20" fill="currentColor" width="14"><path d="M6 4h8v1H6zM7 6h6l-.5 10h-5L7 6zM8 3h4v1H8z" fill-rule="evenodd"/></svg>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16"><path d="M4 7h16M9 5h6M7 7v11a2 2 0 002 2h6a2 2 0 002-2V7M10 11v4M14 11v4"/></svg>
               </button>
             </div>
           </div>

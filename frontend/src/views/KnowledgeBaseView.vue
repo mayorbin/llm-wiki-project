@@ -278,7 +278,7 @@ watch(showNewDir, (v) => { if (v) setTimeout(() => newDirInput.value?.focus(), 5
               title="删除目录"
               @click.stop="confirmDeleteDir(d.path)"
             >
-              <svg viewBox="0 0 20 20" fill="currentColor" width="12"><path d="M6 4h8v1H6zM7 6h6l-.5 10h-5L7 6zM8 3h4v1H8z" fill-rule="evenodd"/></svg>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="14"><path d="M4 7h16M9 5h6M7 7v11a2 2 0 002 2h6a2 2 0 002-2V7M10 11v4M14 11v4"/></svg>
             </button>
           </div>
         </nav>
@@ -303,8 +303,8 @@ watch(showNewDir, (v) => { if (v) setTimeout(() => newDirInput.value?.focus(), 5
                 <td class="size-col">{{ formatSize(f.size_bytes) }}</td>
                 <td class="date-col">{{ formatDate(f.modified_at) }}</td>
                 <td class="action-col">
-                  <button class="btn-ghost" style="padding:4px 6px" @click="confirmDelete(f)" title="删除">
-                    <svg viewBox="0 0 20 20" fill="currentColor" width="14"><path d="M6 4h8v1H6zM7 6h6l-.5 10h-5L7 6zM8 3h4v1H8z" fill-rule="evenodd"/></svg>
+                  <button class="btn-ghost file-del-btn" @click="confirmDelete(f)" title="删除">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16"><path d="M4 7h16M9 5h6M7 7v11a2 2 0 002 2h6a2 2 0 002-2V7M10 11v4M14 11v4"/></svg>
                   </button>
                 </td>
               </tr>
@@ -416,11 +416,11 @@ watch(showNewDir, (v) => { if (v) setTimeout(() => newDirInput.value?.focus(), 5
 .tree-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
 .tree-del-btn {
   display: none; align-items: center; justify-content: center;
-  width: 20px; height: 20px; flex-shrink: 0; border-radius: 3px;
+  width: 22px; height: 22px; flex-shrink: 0; border-radius: 4px;
   color: var(--text-muted); transition: all var(--transition);
 }
 .tree-node:hover .tree-del-btn { display: flex; }
-.tree-del-btn:hover { background: #FEF2F2; color: #DC2626; }
+.tree-del-btn:hover { background: var(--error-bg); color: #DC2626; }
 
 .fm-main { flex: 1; padding: 0; min-width: 0; transition: border-color var(--transition); }
 .fm-main.drag { background: var(--accent-light); }
@@ -452,6 +452,9 @@ tbody tr:last-child td { border-bottom: none; }
 .size-col { color: var(--text-muted); font-size: 13px; white-space: nowrap; }
 .date-col { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
 .action-col { text-align: right; }
+
+.file-del-btn { padding: 5px 7px; }
+.file-del-btn:hover { background: var(--error-bg); color: #DC2626; }
 
 .query-area { width: 100%; max-width: 780px; }
 .query-input-row { display: flex; gap: 10px; margin-bottom: 16px; }
