@@ -7,9 +7,11 @@ import { useRoute } from 'vue-router'
 import { filesApi } from '@/api/files'
 import { knowledgeApi } from '@/api/knowledge'
 import { renderMarkdown } from '@/lib/markdown'
+import { useToast } from '@/composables/useToast'
 
 const route = useRoute()
 const projectId = route.params.projectId as string
+const { error: toastError } = useToast()
 
 const activeTab = ref<'files' | 'query'>('files')
 const currentDir = ref('')
@@ -96,7 +98,7 @@ async function createDirectory() {
     if (currentDir.value) expandTo(currentDir.value)
     await loadDir()
   } catch (e: any) {
-    alert(e.response?.data?.detail || '创建目录失败')
+    toastError(e.response?.data?.detail || '创建目录失败')
   } finally { creatingDir.value = false }
 }
 
@@ -116,7 +118,7 @@ async function executeDeleteDir() {
     }
     await loadDir()
   } catch (e: any) {
-    alert(e.response?.data?.detail || '删除目录失败')
+    toastError(e.response?.data?.detail || '删除目录失败')
   }
 }
 
