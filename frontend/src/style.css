@@ -76,25 +76,34 @@ button {
 button:active { transform: scale(0.98); }
 
 .btn-primary {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   padding: 10px 20px; background: var(--accent); color: #fff;
   border-radius: var(--radius); box-shadow: var(--shadow-xs); font-weight: 600;
+  line-height: 1;
 }
 .btn-primary:hover { background: var(--accent-hover); box-shadow: 0 4px 12px rgba(217,119,6,0.28); transform: translateY(-1px); }
 .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
 
 .btn-secondary {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   padding: 10px 20px; background: var(--bg-card); color: var(--text-primary);
   border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-xs);
+  line-height: 1;
 }
 .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
 
 .btn-ghost {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   padding: 8px 14px; background: transparent; color: var(--text-secondary);
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-sm); line-height: 1;
 }
 .btn-ghost:hover { background: var(--bg-subtle); color: var(--text-primary); }
 
-.btn-danger { padding: 10px 20px; background: #DC2626; color: #fff; border-radius: var(--radius); font-weight: 600; }
+.btn-danger {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 10px 20px; background: #DC2626; color: #fff; border-radius: var(--radius);
+  font-weight: 600; line-height: 1;
+}
 .btn-danger:hover { background: #B91C1C; }
 
 input, textarea, select {
