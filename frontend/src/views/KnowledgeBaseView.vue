@@ -192,19 +192,43 @@ async function executeDelete() {
   showDeleteConfirm.value = false; deleteTarget.value = null; loadDir()
 }
 
+const queryErrorHint = ref('')
+
 async function handleQuery() {
   if (!queryText.value.trim()) return
   queryLoading.value = true
   queryError.value = false
+  queryErrorHint.value = ''
   try {
     const res = await knowledgeApi.query(projectId, queryText.value)
     const answer = res.data?.answer || ''
     queryResult.value = answer
-    queryError.value = answer.startsWith('查询失败')
+    if (answer.startsWith('查询失败')) {
+      queryError.value = true
+      queryErrorHint.value = buildErrorHint(answer)
+    }
   } catch (e: any) {
     queryResult.value = e.response?.data?.detail || e.message || '未知错误'
     queryError.value = true
+    queryErrorHint.value = buildErrorHint(queryResult.value)
   } finally { queryLoading.value = false }
+}
+
+function buildErrorHint(msg: string): string {
+  const s = msg.toLowerCase()
+  if (s.includes('timeout') || s.includes('timed out')) {
+    return '网络超时。请确认 LLM API 地址可访问（检查 VPN/代理），或更换可连通的 API 地址。'
+  }
+  if (s.includes('connection') || s.includes('refused') || s.includes('unreachable')) {
+    return '无法连接 LLM 服务。请确认 API 地址正确且网络可达。'
+  }
+  if (s.includes('401') || s.includes('unauthorized') || s.includes('invalid api key') || s.includes('auth')) {
+    return 'API 密钥无效，请填入正确的 API Key。'
+  }
+  if (s.includes('404') || s.includes('not found')) {
+    return 'API 地址错误（404），请更正 API Base URL。'
+  }
+  return '请检查 LLM API 地址和密钥配置是否正确。'
 }
 
 function formatSize(bytes: number): string {
@@ -363,8 +387,9 @@ watch(showNewDir, (v) => { if (v) setTimeout(() => newDirInput.value?.focus(), 5
           <template v-if="queryError">
             <div class="query-error-title">查询失败</div>
             <div class="query-error-body" v-html="renderMarkdown(queryResult, projectId)" />
-            <div class="query-error-hint">
-              请在<a href="#" @click.prevent="$router.push(`/${projectId}/settings`)">项目设置 → LLM 参数</a>中配置正确的 API 地址和密钥。
+            <div class="query-error-hint">{{ queryErrorHint }}</div>
+            <div class="query-error-action">
+              <a href="#" @click.prevent="$router.push(`/${projectId}/settings`)">项目设置 → LLM 参数</a>
             </div>
           </template>
           <div v-else v-html="renderMarkdown(queryResult, projectId)" />
@@ -530,6 +555,8 @@ tbody tr:last-child td { border-bottom: none; }
 .query-error-body :deep(p) { margin-bottom: 6px; }
 .query-error-hint {
   font-size: 13px; color: var(--text-secondary); padding-top: 12px;
-  border-top: 1px solid #FECACA;
+  border-top: 1px solid #FECACA; margin-bottom: 8px;
 }
+.query-error-action { font-size: 13px; }
+.query-error-action a { font-weight: 500; }
 </style>
