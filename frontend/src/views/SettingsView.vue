@@ -77,6 +77,17 @@ async function handleExport() {
   }
 }
 
+function formatBeijingTime(iso: string): string {
+  if (!iso) return '-'
+  const d = new Date(iso + 'Z')  // 保证 UTC 解析
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit',
+    day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(d)
+  const get = (t: string) => parts.find(p => p.type === t)?.value || ''
+  return `${get('year')}-${get('month')}-${get('day')} ${get('hour')}:${get('minute')}`
+}
+
 onMounted(() => { loadSettings(); loadAuditLog() })
 </script>
 
@@ -170,7 +181,7 @@ onMounted(() => { loadSettings(); loadAuditLog() })
         <thead><tr><th>时间</th><th>操作</th><th>用户</th><th>目标</th></tr></thead>
         <tbody>
           <tr v-for="log in auditLog.slice(0, 30)" :key="log.id">
-            <td class="time-col">{{ (log.timestamp || '').slice(0, 16).replace('T', ' ') }}</td>
+            <td class="time-col">{{ formatBeijingTime(log.timestamp) }}</td>
             <td><span class="badge badge-muted">{{ log.action }}</span></td>
             <td>{{ log.username }}</td>
             <td class="target-col">{{ log.target }}</td>
