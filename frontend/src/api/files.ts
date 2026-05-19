@@ -11,8 +11,8 @@ export const filesApi = {
   deleteDir(projectId: string, path: string) {
     return client.delete('/files/dirs', { data: { project_id: projectId, path } })
   },
-  listFiles(projectId: string, dir?: string, search?: string, offset = 0, limit = 50) {
-    return client.get('/files', { params: { project_id: projectId, dir, search, offset, limit } })
+  listFiles(projectId: string, subdir?: string, search?: string, offset = 0, limit = 50) {
+    return client.get('/files', { params: { project_id: projectId, subdir, search, offset, limit } })
   },
   uploadFile(projectId: string, subdir: string, file: File, onProgress?: (pct: number) => void) {
     const form = new FormData()
