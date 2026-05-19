@@ -5,7 +5,7 @@ import client from './client'
 export const knowledgeApi = {
   /** LLM 综合回答（附 [[wikilinks]] 引用） */
   query(projectId: string, question: string, model?: string) {
-    return client.post('/knowledge/query', { project_id: projectId, question, model })
+    return client.post('/knowledge/query', { project_id: projectId, question, model }, { timeout: 180000 })
   },
   /** Wiki 页面树（按类型分组） */
   getPages(projectId: string, type?: string) {
