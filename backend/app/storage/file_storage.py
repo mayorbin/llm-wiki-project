@@ -137,14 +137,18 @@ def safe_subdir(base: Path, subdir: str) -> Path:
     if ".." in parts:
         raise ValueError(f"路径穿越检测: {subdir}")
     cleaned = "/".join(s for s in parts if s != ".")
+
+    # 确保 base 为绝对路径，Windows 下相对/绝对混用会导致
+    # resolve() / relative_to() 行为不一致
+    base = base.resolve()
     candidate = (base / cleaned).resolve()
 
     # 必须在 base 目录之下
-    if not str(candidate).startswith(str(base.resolve())):
+    if not str(candidate).startswith(str(base)):
         raise ValueError(f"路径穿越检测: {subdir}")
 
     # 深度限制
-    relative = candidate.relative_to(base.resolve())
+    relative = candidate.relative_to(base)
     depth = len(relative.parts) if str(relative) != "." else 0
     if depth > MAX_SUBDIR_DEPTH:
         raise ValueError(f"子目录深度超过限制（最多 {MAX_SUBDIR_DEPTH} 层）: {subdir}")

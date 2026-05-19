@@ -32,9 +32,9 @@ def _now() -> str:
 
 
 def _project_raw_dir(project_id: str) -> Path:
-    """获取项目的 raw/ 目录路径。"""
+    """获取项目的 raw/ 目录路径（均解析为绝对路径）。"""
     settings = get_settings()
-    return Path(settings.data_dir) / "projects" / project_id / "raw"
+    return (Path(settings.data_dir) / "projects" / project_id / "raw").resolve()
 
 
 def _check_project_access(project_id: str, user_id: str):
