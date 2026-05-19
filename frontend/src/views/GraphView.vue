@@ -27,11 +27,14 @@ async function loadGraph() {
   try {
     const res = await graphApi.getData(projectId)
     cachedGraphData = res.data
-    renderGraph(res.data)
     stats.value = res.data.stats || { node_count: res.data.nodes?.length || 0, edge_count: res.data.edges?.length || 0, community_count: 0, extracted_edges: 0, inferred_edges: 0 }
+    loading.value = false
+    await nextTick()
+    renderGraph(res.data)
   } catch (e: any) {
     error.value = '图谱加载失败'
-  } finally { loading.value = false }
+    loading.value = false
+  } finally { /* loading 已在 try/catch 中处理 */ }
 }
 
 function renderGraph(data: any) {
