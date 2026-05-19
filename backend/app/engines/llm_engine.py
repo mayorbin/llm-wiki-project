@@ -84,13 +84,17 @@ def call_llm(
         })
 
     # 构建 litellm 参数
-    kwargs = {
+    kwargs: dict = {
         "model": model,
         "messages": messages,
         "temperature": temperature,
-        "api_base": api_base,
-        "api_key": api_key,
     }
+    # api_base / api_key 仅在显式配置时传入，
+    # 空字符串或 None 表示使用 litellm 内置的 provider 默认地址
+    if api_base:
+        kwargs["api_base"] = api_base
+    if api_key:
+        kwargs["api_key"] = api_key
     if max_tokens:
         kwargs["max_tokens"] = max_tokens
     if timeout:

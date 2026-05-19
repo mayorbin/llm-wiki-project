@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     # ── 默认 LLM 配置（全局默认，项目可覆盖） ──
     llm_provider: str = "openai_compatible"
     llm_model: str = "deepseek/deepseek-v4-flash"
-    llm_api_base: str = "http://localhost:8000/v1"
+    llm_api_base: str = ""  # 空则使用 litellm 内置的 provider 默认地址
     llm_api_key: str = ""
     llm_temperature: float = 0.3
     llm_max_tokens: int = 8192
