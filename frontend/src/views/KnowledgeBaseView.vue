@@ -26,6 +26,7 @@ const fileList = ref<any[]>([])
 const loading = ref(false)
 const queryText = ref('')
 const queryResult = ref('')
+const queryError = ref(false)
 const queryLoading = ref(false)
 const deleteTarget = ref<any>(null)
 const showDeleteConfirm = ref(false)
@@ -194,11 +195,15 @@ async function executeDelete() {
 async function handleQuery() {
   if (!queryText.value.trim()) return
   queryLoading.value = true
+  queryError.value = false
   try {
     const res = await knowledgeApi.query(projectId, queryText.value)
-    queryResult.value = res.data?.answer || JSON.stringify(res.data)
+    const answer = res.data?.answer || ''
+    queryResult.value = answer
+    queryError.value = answer.startsWith('查询失败')
   } catch (e: any) {
-    queryResult.value = `查询失败: ${e.response?.data?.detail || e.message}`
+    queryResult.value = e.response?.data?.detail || e.message || '未知错误'
+    queryError.value = true
   } finally { queryLoading.value = false }
 }
 
@@ -354,7 +359,16 @@ watch(showNewDir, (v) => { if (v) setTimeout(() => newDirInput.value?.focus(), 5
           <input v-model="queryText" placeholder="输入问题，例如：这些文档的核心主题是什么？" @keyup.enter="handleQuery" class="query-input" />
           <button class="btn-primary" :disabled="queryLoading" @click="handleQuery">{{ queryLoading ? '查询中...' : '查询' }}</button>
         </div>
-        <div v-if="queryResult" class="query-result card" v-html="renderMarkdown(queryResult, projectId)" />
+        <div v-if="queryResult" class="query-result card" :class="{ 'query-error': queryError }">
+          <template v-if="queryError">
+            <div class="query-error-title">查询失败</div>
+            <div class="query-error-body" v-html="renderMarkdown(queryResult, projectId)" />
+            <div class="query-error-hint">
+              请在<a href="#" @click.prevent="$router.push(`/${projectId}/settings`)">项目设置 → LLM 参数</a>中配置正确的 API 地址和密钥。
+            </div>
+          </template>
+          <div v-else v-html="renderMarkdown(queryResult, projectId)" />
+        </div>
       </div>
     </template>
 
@@ -509,4 +523,13 @@ tbody tr:last-child td { border-bottom: none; }
 .query-result :deep(p) { margin-bottom: 10px; }
 .query-result :deep(a) { color: var(--accent); }
 .query-result :deep(blockquote) { border-left: 2.5px solid var(--accent); padding-left: 14px; color: var(--text-secondary); margin: 10px 0; }
+
+.query-error { background: var(--error-bg); border-color: #FECACA; }
+.query-error-title { font-size: 16px; font-weight: 650; color: var(--error-text); margin-bottom: 10px; }
+.query-error-body { font-size: 14px; color: var(--error-text); margin-bottom: 14px; }
+.query-error-body :deep(p) { margin-bottom: 6px; }
+.query-error-hint {
+  font-size: 13px; color: var(--text-secondary); padding-top: 12px;
+  border-top: 1px solid #FECACA;
+}
 </style>
