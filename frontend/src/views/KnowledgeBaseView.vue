@@ -21,6 +21,8 @@ const queryResult = ref('')
 const queryLoading = ref(false)
 const deleteTarget = ref<any>(null)
 const showDeleteConfirm = ref(false)
+const deleteDirTarget = ref<string>('')
+const showDeleteDirConfirm = ref(false)
 const uploading = ref(false)
 const dragOver = ref(false)
 const showNewDir = ref(false)
@@ -96,6 +98,26 @@ async function createDirectory() {
   } catch (e: any) {
     alert(e.response?.data?.detail || '创建目录失败')
   } finally { creatingDir.value = false }
+}
+
+function confirmDeleteDir(dirPath: string) {
+  deleteDirTarget.value = dirPath
+  showDeleteDirConfirm.value = true
+}
+
+async function executeDeleteDir() {
+  if (!deleteDirTarget.value) return
+  try {
+    await filesApi.deleteDir(projectId, deleteDirTarget.value)
+    showDeleteDirConfirm.value = false
+    deleteDirTarget.value = ''
+    if (currentDir.value === deleteDirTarget.value || currentDir.value.startsWith(deleteDirTarget.value + '/')) {
+      currentDir.value = ''
+    }
+    await loadDir()
+  } catch (e: any) {
+    alert(e.response?.data?.detail || '删除目录失败')
+  }
 }
 
 async function loadDir() {
@@ -248,6 +270,14 @@ watch(showNewDir, (v) => { if (v) setTimeout(() => newDirInput.value?.focus(), 5
             <svg v-else class="tree-file-icon" viewBox="0 0 20 20" fill="currentColor" width="13"><path d="M6 2h5l3 3v12a1 1 0 01-1 1H7a1 1 0 01-1-1V3a1 1 0 011-1z" fill-rule="evenodd"/></svg>
 
             <span class="tree-name">{{ d.name }}</span>
+            <button
+              v-if="!d.isFile && d.depth > 0"
+              class="tree-del-btn"
+              title="删除目录"
+              @click.stop="confirmDeleteDir(d.path)"
+            >
+              <svg viewBox="0 0 20 20" fill="currentColor" width="12"><path d="M6 4h8v1H6zM7 6h6l-.5 10h-5L7 6zM8 3h4v1H8z" fill-rule="evenodd"/></svg>
+            </button>
           </div>
         </nav>
 
@@ -294,11 +324,22 @@ watch(showNewDir, (v) => { if (v) setTimeout(() => newDirInput.value?.focus(), 5
 
     <div v-if="showDeleteConfirm" class="modal-overlay" @click.self="showDeleteConfirm = false">
       <div class="modal">
-        <div class="modal-header">确认删除</div>
+        <div class="modal-header">确认删除文件</div>
         <div class="modal-body"><p>删除 <strong>{{ deleteTarget?.filename || deleteTarget?.name }}</strong> 将级联删除关联的 Wiki 页面，且不可撤销。</p></div>
         <div class="modal-footer">
           <button class="btn-secondary" @click="showDeleteConfirm = false">取消</button>
           <button class="btn-danger" @click="executeDelete">确认删除</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showDeleteDirConfirm" class="modal-overlay" @click.self="showDeleteDirConfirm = false">
+      <div class="modal">
+        <div class="modal-header">确认删除目录</div>
+        <div class="modal-body"><p>删除目录 <strong>{{ deleteDirTarget }}</strong>？仅空目录可删除，目录内有文件时需先清空。</p></div>
+        <div class="modal-footer">
+          <button class="btn-secondary" @click="showDeleteDirConfirm = false">取消</button>
+          <button class="btn-danger" @click="executeDeleteDir">确认删除</button>
         </div>
       </div>
     </div>
@@ -370,7 +411,14 @@ watch(showNewDir, (v) => { if (v) setTimeout(() => newDirInput.value?.focus(), 5
 .tree-chevron-spacer { width: 16px; flex-shrink: 0; }
 .tree-icon { color: var(--text-muted); flex-shrink: 0; }
 .tree-file-icon { color: var(--border-strong); flex-shrink: 0; }
-.tree-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tree-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.tree-del-btn {
+  display: none; align-items: center; justify-content: center;
+  width: 20px; height: 20px; flex-shrink: 0; border-radius: 3px;
+  color: var(--text-muted); transition: all var(--transition);
+}
+.tree-node:hover .tree-del-btn { display: flex; }
+.tree-del-btn:hover { background: #FEF2F2; color: #DC2626; }
 
 .fm-main { flex: 1; padding: 0; min-width: 0; transition: border-color var(--transition); }
 .fm-main.drag { background: var(--accent-light); }
