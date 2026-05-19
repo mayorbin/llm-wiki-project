@@ -23,6 +23,10 @@ const deleteTarget = ref<any>(null)
 const showDeleteConfirm = ref(false)
 const uploading = ref(false)
 const dragOver = ref(false)
+const showNewDir = ref(false)
+const newDirName = ref('')
+const creatingDir = ref(false)
+const newDirInput = ref<HTMLInputElement | null>(null)
 
 // 展开状态：默认展开根目录（path='' 即"全部文件"）
 const expandedDirs = ref<Set<string>>(new Set(['']))
@@ -66,6 +70,32 @@ function toggleDir(path: string) {
   if (next.has(path)) next.delete(path)
   else next.add(path)
   expandedDirs.value = next
+}
+
+function expandTo(path: string) {
+  const next = new Set(expandedDirs.value)
+  // 逐级展开 path 的所有父目录
+  const parts = path.split('/')
+  for (let i = 0; i < parts.length; i++) {
+    next.add(parts.slice(0, i + 1).join('/'))
+  }
+  expandedDirs.value = next
+}
+
+async function createDirectory() {
+  const name = newDirName.value.trim()
+  if (!name) return
+  creatingDir.value = true
+  try {
+    const fullPath = currentDir.value ? `${currentDir.value}/${name}` : name
+    await filesApi.createDir(projectId, fullPath)
+    newDirName.value = ''
+    showNewDir.value = false
+    if (currentDir.value) expandTo(currentDir.value)
+    await loadDir()
+  } catch (e: any) {
+    alert(e.response?.data?.detail || '创建目录失败')
+  } finally { creatingDir.value = false }
 }
 
 async function loadDir() {
@@ -144,6 +174,7 @@ function getFileStem(name: string): string {
 
 onMounted(loadDir)
 watch(currentDir, loadDir)
+watch(showNewDir, (v) => { if (v) setTimeout(() => newDirInput.value?.focus(), 50) })
 </script>
 
 <template>
@@ -165,9 +196,9 @@ watch(currentDir, loadDir)
         </div>
         <div class="fm-actions">
           <span class="fm-count" v-if="fileList.length">{{ fileList.length }} 个文件</span>
-          <label class="btn-primary btn-sm">
+          <label class="btn-primary btn-sm" :title="currentDir ? `上传到 ${currentDir}` : '上传到根目录'">
             <svg viewBox="0 0 20 20" fill="currentColor" width="15"><path d="M10 3v12M4 10h12" stroke="currentColor" stroke-width="2" fill="none"/></svg>
-            上传文件
+            {{ currentDir ? `上传到 ${currentDir}` : '上传文件' }}
             <input type="file" multiple hidden @change="handleUpload" :disabled="uploading" />
           </label>
         </div>
@@ -175,7 +206,21 @@ watch(currentDir, loadDir)
 
       <div class="fm-body">
         <nav class="fm-sidebar">
-          <div class="fm-sidebar-label">文件</div>
+          <div class="fm-sidebar-header">
+            <span class="fm-sidebar-label">文件</span>
+            <button class="fm-sidebar-add-btn" title="新建目录" @click="showNewDir = !showNewDir">
+              <svg viewBox="0 0 20 20" fill="currentColor" width="14"><path d="M10 3v12M4 10h12" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+            </button>
+          </div>
+          <form v-if="showNewDir" class="fm-new-dir-form" @submit.prevent="createDirectory">
+            <input
+              v-model="newDirName"
+              placeholder="新目录名"
+              class="fm-new-dir-input"
+              :disabled="creatingDir"
+              ref="newDirInput"
+            />
+          </form>
           <div
             v-for="d in flatTree"
             :key="d.path || 'root'"
@@ -283,8 +328,22 @@ watch(currentDir, loadDir)
 /* body */
 .fm-body { display: flex; background: var(--bg-card); border: 1px solid var(--border); border-top: none; border-radius: 0 0 var(--radius-lg) var(--radius-lg); min-height: 400px; overflow: hidden; }
 
-.fm-sidebar { width: 200px; min-width: 0; border-right: 1px solid var(--border-light); padding: 14px 0; flex-shrink: 0; overflow-y: auto; }
-.fm-sidebar-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; padding: 0 14px 8px; }
+.fm-sidebar { width: 200px; min-width: 0; border-right: 1px solid var(--border-light); padding: 14px 0; flex-shrink: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.fm-sidebar-header { display: flex; align-items: center; justify-content: space-between; padding: 0 10px 0 14px; margin-bottom: 8px; }
+.fm-sidebar-label { font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; }
+.fm-sidebar-add-btn {
+  display: flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; border-radius: 4px;
+  color: var(--text-muted); transition: all var(--transition);
+}
+.fm-sidebar-add-btn:hover { background: var(--bg-subtle); color: var(--text-primary); }
+.fm-new-dir-form { padding: 0 10px 6px; }
+.fm-new-dir-input {
+  width: 100%; padding: 5px 8px; font-size: 12px;
+  border: 1px solid var(--accent); border-radius: 4px;
+  background: var(--bg-card); color: var(--text-primary);
+  outline: none;
+}
 
 /* directory tree nodes */
 .tree-node {
