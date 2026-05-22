@@ -7,6 +7,7 @@ import { useRoute } from 'vue-router'
 import { filesApi } from '@/api/files'
 import { ingestionApi } from '@/api/ingestion'
 import { knowledgeApi } from '@/api/knowledge'
+import { projectsApi } from '@/api/projects'
 import { renderMarkdown } from '@/lib/markdown'
 import { useToast } from '@/composables/useToast'
 
@@ -183,13 +184,15 @@ async function uploadFiles(files: File[]) {
   uploadTotalFiles.value = files.length
   uploadProgress.value = 0
   let ok = 0
+  const uploadedPaths: string[] = []
   for (let i = 0; i < files.length; i++) {
     uploadFileIndex.value = i + 1
     uploadFileName.value = files[i].name
     try {
-      await filesApi.uploadFile(projectId, currentDir.value, files[i], (pct) => {
+      const res = await filesApi.uploadFile(projectId, currentDir.value, files[i], (pct) => {
         uploadProgress.value = pct
       })
+      if (res.data?.path) uploadedPaths.push(res.data.path)
       ok++
     } catch (e: any) {
       toastError(e.response?.data?.detail || `上传失败: ${files[i].name}`)
@@ -200,6 +203,17 @@ async function uploadFiles(files: File[]) {
   uploadFileName.value = ''
   uploadProgress.value = 0
   loadDir()
+
+  // 自动摄入
+  if (ok > 0 && uploadedPaths.length > 0) {
+    try {
+      const s = await projectsApi.getSettings(projectId)
+      if (s.data?.settings?.features?.auto_ingest_on_upload) {
+        await ingestionApi.trigger(projectId, uploadedPaths)
+        toastSuccess(`已自动摄入 ${uploadedPaths.length} 个文件`)
+      }
+    } catch { /* 自动摄入失败不阻塞 */ }
+  }
 }
 
 function confirmDelete(file: any) { deleteTarget.value = file; showDeleteConfirm.value = true }

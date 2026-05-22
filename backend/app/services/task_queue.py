@@ -263,11 +263,26 @@ source_file: {fp}
 
         update_task_status(task_id, "running", progress=90)
 
-        # 重建图谱
-        from app.engines.graph_engine import GraphEngine
-        graph_dir = base_dir / "graph"
-        engine = GraphEngine(wiki_dir=wiki_dir, graph_dir=graph_dir)
-        engine.build(run_inference=False)
+        # 检查是否启用自动重建图谱
+        import json as _json
+        from app.storage.database import get_db as _get_db
+        should_rebuild = True  # 默认开启
+        try:
+            db = _get_db("users")
+            row = db.execute(
+                "SELECT settings FROM project_settings WHERE project_id = ?", (project_id,),
+            ).fetchone()
+            if row:
+                s = _json.loads(row["settings"])
+                should_rebuild = s.get("features", {}).get("auto_graph_rebuild", True)
+        except Exception:
+            pass
+
+        if should_rebuild:
+            from app.engines.graph_engine import GraphEngine
+            graph_dir = base_dir / "graph"
+            engine = GraphEngine(wiki_dir=wiki_dir, graph_dir=graph_dir)
+            engine.build(run_inference=False)
 
         update_task_status(task_id, "running", progress=100)
 
