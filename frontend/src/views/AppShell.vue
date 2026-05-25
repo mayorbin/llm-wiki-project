@@ -352,7 +352,7 @@ async function executeDelete() {
 }
 .logout-icon:hover { color: #DC2626; background: var(--error-bg); }
 
-.main { flex: 1; min-width: 0; padding: 32px 40px 64px; }
+.main { flex: 1; min-width: 0; padding: 32px 40px 64px; display: flex; flex-direction: column; }
 
 .page-enter-active { animation: fadeIn 0.18s ease; }
 .page-leave-active { animation: fadeIn 0.1s ease reverse; }

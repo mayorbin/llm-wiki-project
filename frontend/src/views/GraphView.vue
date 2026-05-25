@@ -55,7 +55,7 @@ function renderGraph(data: any) {
 
   graphInstance = new Graph({
     container: 'graph-canvas',
-    width: container.clientWidth, height: container.clientHeight || 520,
+    width: container.clientWidth, height: container.clientHeight || 600,
     data: {
       nodes: visibleNodes.map((n: any) => ({
         id: n.id, data: { label: n.label || n.id, nodeType: n.type, community: n.community },
@@ -135,8 +135,8 @@ watch([showSource, showEntity, showConcept, showExtracted, showInferred], () => 
 </template>
 
 <style scoped>
-.graph-page { width: 100%; }
-.graph-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
+.graph-page { width: 100%; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.graph-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; flex-shrink: 0; }
 
 h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; margin-bottom: 2px; }
 .graph-desc { font-size: 13px; color: var(--text-muted); }
@@ -149,7 +149,7 @@ h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; margin-bottom: 2
 
 .btn-sm { padding: 7px 16px; font-size: 13px; }
 
-.graph-body { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-xs); overflow: hidden; }
+.graph-body { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-xs); overflow: hidden; display: flex; flex-direction: column; flex: 1; min-height: 0; }
 
 .filter-bar { display: flex; align-items: center; gap: 0; padding: 10px 16px; border-bottom: 1px solid var(--border-light); background: var(--bg-subtle); }
 .filter-group { display: flex; align-items: center; gap: 4px; }
@@ -163,7 +163,7 @@ h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; margin-bottom: 2
 .edge-line.solid { background: #94A3B8; } .edge-line.dash { background: repeating-linear-gradient(90deg, #FF5722 0px, #FF5722 3px, transparent 3px, transparent 5px); }
 .filter-divider { width: 1px; height: 20px; background: var(--border); margin: 0 12px; }
 
-.canvas-wrap { position: relative; min-height: 460px; }
-.canvas { width: 100%; height: 500px; }
+.canvas-wrap { position: relative; flex: 1; min-height: 460px; }
+.canvas { width: 100%; height: 100%; }
 .loading-state { display: flex; align-items: center; justify-content: center; height: 400px; color: var(--text-muted); font-size: 14px; }
 </style>
