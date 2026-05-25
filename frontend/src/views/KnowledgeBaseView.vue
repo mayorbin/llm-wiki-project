@@ -575,7 +575,7 @@ tbody tr:last-child td { border-bottom: none; }
 .file-del-btn { padding: 5px 7px; }
 .file-del-btn:hover { background: var(--error-bg); color: #DC2626; }
 
-.query-area { width: 100%; max-width: 780px; }
+.query-area { width: 100%; }
 .query-input-row { display: flex; gap: 10px; margin-bottom: 16px; }
 .query-input { flex: 1; padding: 12px 16px; font-size: 15px; }
 .query-result { font-size: 15px; line-height: 1.75; }
