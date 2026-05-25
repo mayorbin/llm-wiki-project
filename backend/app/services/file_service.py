@@ -393,7 +393,14 @@ def delete_file(project_id: str, user_id: str, file_path: str):
         user_id: 当前用户 ID
         file_path: 相对于 raw/ 的文件路径
     """
-    _check_project_access(project_id, user_id)
+    # 权限：仅 owner 和 editor 可删除
+    db = get_db("users")
+    role = db.execute(
+        "SELECT role FROM project_members WHERE project_id = ? AND user_id = ?",
+        (project_id, user_id),
+    ).fetchone()
+    if not role or role["role"] not in ("owner", "editor"):
+        raise PermissionError("仅有 owner 或 editor 可以删除文件")
 
     base_dir = _project_raw_dir(project_id)
     target = safe_subdir(base_dir, file_path)
@@ -604,39 +611,6 @@ def refresh_all_changed(project_id: str, user_id: str) -> dict:
     return refresh_files(project_id, user_id, all_changed)
 
 
-def delete_file(project_id: str, user_id: str, file_path: str):
-    """删除 raw/ 下的指定文件。
-
-    Args:
-        project_id: 项目 ID
-        user_id: 操作者用户 ID
-        file_path: 文件路径（相对 raw/，如 "customers.xlsx" 或 "子目录/file.pdf"）
-    """
-    # 权限：仅 owner 和 editor 可删除
-    db = get_db("users")
-    role = db.execute(
-        "SELECT role FROM project_members WHERE project_id = ? AND user_id = ?",
-        (project_id, user_id),
-    ).fetchone()
-    if not role or role["role"] not in ("owner", "editor"):
-        raise PermissionError("仅有 owner 或 editor 可以删除文件")
-
-    base_dir = _project_raw_dir(project_id)
-    target = safe_subdir(base_dir, file_path)
-    if not target.exists() or not target.is_file():
-        raise ValueError(f"文件不存在: {file_path}")
-
-    # 删除文件
-    target.unlink()
-    logger.info("文件已删除", extra={"project_id": project_id, "file": file_path, "user": user_id})
-
-    # 尝试清理空目录
-    parent = target.parent
-    if parent != base_dir and not any(parent.iterdir()):
-        try:
-            parent.rmdir()
-        except OSError:
-            pass
 
 
 def _create_ingest_task(project_id: str, user_id: str, file_paths: list[str]) -> str:
