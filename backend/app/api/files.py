@@ -8,6 +8,7 @@ from typing import Optional
 
 from app.api.deps import get_current_user
 from app.services import file_service as svc
+from app.services.audit_service import write_audit_log
 
 router = APIRouter()
 
@@ -71,6 +72,7 @@ async def create_directory(
     """在 raw/ 下创建子目录。"""
     try:
         svc.create_directory(body.project_id, user["id"], body.path)
+        write_audit_log("dir.create", user["id"], user["username"], body.project_id, body.path)
         return {"detail": "目录创建成功", "path": body.path}
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
@@ -86,6 +88,7 @@ async def delete_directory(
     """删除 raw/ 下的空子目录。"""
     try:
         svc.delete_directory(body.project_id, user["id"], body.path)
+        write_audit_log("dir.delete", user["id"], user["username"], body.project_id, body.path)
         return {"detail": "目录已删除", "path": body.path}
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
@@ -106,6 +109,7 @@ async def upload_file(
     """上传单个文件到 raw/ 目录。"""
     try:
         result = svc.upload_file(project_id, user["id"], file.file, file.filename, subdir)
+        write_audit_log("file.upload", user["id"], user["username"], project_id, result["path"])
         return result
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
@@ -193,6 +197,7 @@ async def delete_file(
     """删除文件（级联删除关联的摄入记录）。"""
     try:
         svc.delete_file(project_id, user["id"], file_id)
+        write_audit_log("file.delete", user["id"], user["username"], project_id, file_id)
         return {"detail": "文件已删除"}
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
@@ -208,7 +213,9 @@ async def move_file(
 ):
     """移动文件到指定子目录。"""
     try:
-        return svc.move_file(project_id, user["id"], body.source, body.destination_dir)
+        result = svc.move_file(project_id, user["id"], body.source, body.destination_dir)
+        write_audit_log("file.move", user["id"], user["username"], project_id, f"{body.source} → {result['destination']}")
+        return result
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except ValueError as e:
