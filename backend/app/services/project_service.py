@@ -427,6 +427,16 @@ def transfer_ownership(project_id: str, user_id: str, target_user_id: str) -> di
 # ── 项目设置 ──
 
 
+def _default_settings() -> dict:
+    """返回项目设置的默认值，新项目或未配置时使用。"""
+    return {
+        "features": {
+            "auto_ingest_on_upload": True,
+            "auto_graph_rebuild": True,
+        },
+    }
+
+
 def get_project_settings(project_id: str, user_id: str) -> dict:
     """获取项目设置（任何成员可读）。
 
@@ -449,11 +459,18 @@ def get_project_settings(project_id: str, user_id: str) -> dict:
     ).fetchone()
 
     if not settings_row:
-        return {"project_id": project_id, "settings": {}, "updated_at": ""}
+        return {"project_id": project_id, "settings": _default_settings(), "updated_at": ""}
+
+    settings = json.loads(settings_row["settings"]) or {}
+    # 补齐缺失的默认值
+    defaults = _default_settings()
+    for key in defaults:
+        if key not in settings:
+            settings[key] = defaults[key]
 
     return {
         "project_id": project_id,
-        "settings": json.loads(settings_row["settings"]),
+        "settings": settings,
         "updated_at": settings_row["updated_at"],
     }
 

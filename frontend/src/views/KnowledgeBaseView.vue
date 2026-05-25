@@ -211,7 +211,7 @@ async function uploadFiles(files: File[]) {
   if (ok > 0 && uploadedPaths.length > 0) {
     try {
       const s = await projectsApi.getSettings(projectId)
-      if (s.data?.settings?.features?.auto_ingest_on_upload) {
+      if (s.data?.settings?.features?.auto_ingest_on_upload ?? true) {
         await ingestionApi.trigger(projectId, uploadedPaths)
         toastSuccess(`已自动摄入 ${uploadedPaths.length} 个文件`)
       }
