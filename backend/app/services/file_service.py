@@ -403,8 +403,28 @@ def delete_file(project_id: str, user_id: str, file_path: str):
 
     target.unlink()
 
-    # 级联：标记关联摄入任务
     relative_path = str(target.relative_to(base_dir)).replace("\\", "/")
+
+    # 级联：删除关联的 Wiki 页面
+    wiki_dir = base_dir.parent / "wiki"
+    if wiki_dir.exists():
+        from app.engines.wiki_engine import remove_from_index, append_log
+        slug = Path(relative_path).stem
+        slug = __import__('re').sub(r'[^a-zA-Z0-9一-鿿_-]', '-', slug).lower()[:50]
+        wiki_page = wiki_dir / "sources" / f"{slug}.md"
+        if wiki_page.exists():
+            wiki_page.unlink()
+            try:
+                remove_from_index(wiki_dir, slug, "sources")
+            except Exception:
+                pass
+            try:
+                now = datetime.now(timezone.utc).isoformat()
+                append_log(wiki_dir, f"## [{now[:10]}] delete | {relative_path}")
+            except Exception:
+                pass
+
+    # 级联：标记关联摄入任务
     tasks_db = get_db("tasks")
     tasks_db.execute(
         "UPDATE task_queue SET error_detail = COALESCE(error_detail, '') || ' [源文件已删除]' "
@@ -412,6 +432,16 @@ def delete_file(project_id: str, user_id: str, file_path: str):
         (project_id, f"%{relative_path}%"),
     )
     tasks_db.commit()
+
+    # 重建图谱
+    try:
+        from app.engines.graph_engine import GraphEngine
+        graph_dir = base_dir.parent / "graph"
+        wd = wiki_dir if wiki_dir.exists() else base_dir.parent / "wiki"
+        engine = GraphEngine(wiki_dir=wd, graph_dir=graph_dir)
+        engine.build(run_inference=False)
+    except Exception:
+        pass
 
     logger.info("文件已删除（级联）", extra={"project_id": project_id, "file": relative_path})
 
