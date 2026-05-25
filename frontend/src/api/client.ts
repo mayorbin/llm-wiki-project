@@ -26,6 +26,8 @@ client.interceptors.request.use((config: InternalAxiosRequestConfig) => {
   return config
 })
 
+let isRefreshing = false
+
 // 响应拦截器——401 自动刷新 Token、统一错误处理
 client.interceptors.response.use(
   (response) => {
@@ -34,12 +36,19 @@ client.interceptors.response.use(
   },
   async (error: AxiosError) => {
     activeRequests.value--
-    if (error.response?.status === 401) {
+    const url = error.config?.url || ''
+    // 跳过 auth 相关端点，避免 /auth/refresh 自身 401 触发无限刷新
+    const isAuthEndpoint = url.includes('/auth/')
+    if (error.response?.status === 401 && !isAuthEndpoint) {
+      if (isRefreshing) return Promise.reject(error)
+      isRefreshing = true
       const auth = useAuthStore()
       try {
         await auth.refreshToken()
-        return client.request(error.config!)  // 用新 token 重试原请求
+        isRefreshing = false
+        return client.request(error.config!)
       } catch {
+        isRefreshing = false
         auth.logout()
         router.push('/login')
       }

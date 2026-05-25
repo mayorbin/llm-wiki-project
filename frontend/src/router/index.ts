@@ -59,11 +59,7 @@ router.beforeEach(async (to) => {
   const { useAuthStore } = await import('@/stores/auth')
   const auth = useAuthStore()
 
-  if (!auth.isAuthenticated) {
-    await auth.initialize()
-  }
-
-  // F5刷新后 token 有效但 projects 未加载——需重新拉取
+  // 有 token 但未初始化（或 projects 为空）时加载用户数据
   if (auth.isAuthenticated && (!auth.projects || auth.projects.length === 0)) {
     await auth.initialize()
   }
