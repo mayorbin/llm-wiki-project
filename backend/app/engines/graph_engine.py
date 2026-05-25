@@ -13,6 +13,7 @@ SHA256 缓存：仅重建内容变化的页面，未变化的复用缓存。
 import json
 import hashlib
 import logging
+import re
 from pathlib import Path
 from typing import Optional
 from datetime import datetime, timezone
@@ -282,6 +283,25 @@ class GraphEngine:
         """
         t0 = datetime.now(timezone.utc)
         logger.info("图谱构建开始")
+
+        # 清理孤立 wiki 页面（对应 raw 文件已删除的 source 页面）
+        raw_dir = self.wiki_dir.parent / "raw"
+        sources_dir = self.wiki_dir / "sources"
+        if sources_dir.exists() and raw_dir.exists():
+            for page in list(sources_dir.glob("*.md")):
+                # 尝试根据 wiki 页面的 source_file 元数据或 slug 反查 raw 文件
+                # 优先从 frontmatter 中读取 source_file
+                content = read_page(page)
+                match = re.search(r'(?m)^source_file:\s*(.+)$', content)
+                raw_path = match.group(1).strip() if match else None
+                if raw_path and not (raw_dir / raw_path).exists():
+                    page.unlink()
+                    try:
+                        from app.engines.wiki_engine import remove_from_index
+                        remove_from_index(self.wiki_dir, page.stem, "sources")
+                    except Exception:
+                        pass
+                    logger.info("已清理孤立 wiki 页面", extra={"page": str(page), "raw": raw_path})
 
         # 收集所有 wiki 页面
         pages = [p for p in self.wiki_dir.rglob("*.md")
