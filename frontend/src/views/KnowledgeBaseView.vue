@@ -34,6 +34,9 @@ const deleteTarget = ref<any>(null)
 const showDeleteConfirm = ref(false)
 const deleteDirTarget = ref<string>('')
 const showDeleteDirConfirm = ref(false)
+const selectedFiles = ref<Set<string>>(new Set())
+const showBatchDeleteConfirm = ref(false)
+const batchDeleting = ref(false)
 const uploading = ref(false)
 const uploadProgress = ref(0)
 const uploadFileName = ref('')
@@ -223,6 +226,45 @@ async function executeDelete() {
   showDeleteConfirm.value = false; deleteTarget.value = null; loadDir()
 }
 
+function toggleSelectAll() {
+  if (selectedFiles.value.size === fileList.value.length) {
+    selectedFiles.value = new Set()
+  } else {
+    selectedFiles.value = new Set(fileList.value.map((f: any) => f.path))
+  }
+}
+
+function toggleSelect(path: string) {
+  const next = new Set(selectedFiles.value)
+  if (next.has(path)) next.delete(path)
+  else next.add(path)
+  selectedFiles.value = next
+}
+
+function confirmBatchDelete() {
+  if (selectedFiles.value.size === 0) return
+  showBatchDeleteConfirm.value = true
+}
+
+async function executeBatchDelete() {
+  if (selectedFiles.value.size === 0) return
+  batchDeleting.value = true
+  let ok = 0
+  for (const path of selectedFiles.value) {
+    try {
+      await filesApi.deleteFile(path, projectId)
+      ok++
+    } catch (e: any) {
+      toastError(`删除失败: ${path}`)
+    }
+  }
+  batchDeleting.value = false
+  showBatchDeleteConfirm.value = false
+  selectedFiles.value = new Set()
+  if (ok > 0) toastSuccess(`成功删除 ${ok} 个文件`)
+  loadDir()
+}
+
 const queryErrorHint = ref('')
 
 async function handleQuery() {
@@ -312,7 +354,9 @@ watch(showNewDir, (v) => { if (v) setTimeout(() => newDirInput.value?.focus(), 5
             </div>
           </template>
           <template v-else>
-            <span class="fm-count" v-if="fileList.length">{{ fileList.length }} 个文件</span>
+            <span class="fm-count" v-if="fileList.length && selectedFiles.size === 0">{{ fileList.length }} 个文件</span>
+            <span class="fm-count" v-else-if="selectedFiles.size > 0">已选 {{ selectedFiles.size }} 个</span>
+            <button v-if="selectedFiles.size > 0" class="btn-danger btn-sm" @click="confirmBatchDelete">删除选中</button>
             <button class="btn-secondary btn-sm" :disabled="ingesting" @click="handleIngest" title="摄入文件生成知识页">
               <svg viewBox="0 0 20 20" fill="currentColor" width="14"><path d="M10 3l6 4-2 1.5L11 7v9H9V7L6 8.5 4 7l6-4z" fill-rule="evenodd"/></svg>
               {{ ingesting ? '摄入中...' : '摄入' }}
@@ -389,9 +433,10 @@ watch(showNewDir, (v) => { if (v) setTimeout(() => newDirInput.value?.focus(), 5
             <p>目录为空，拖拽文件或点击上传</p>
           </div>
           <table v-else>
-            <thead><tr><th>文件名</th><th>大小</th><th>修改日期</th><th></th></tr></thead>
+            <thead><tr><th class="sel-col"><input type="checkbox" :checked="selectedFiles.size === fileList.length && fileList.length > 0" @change="toggleSelectAll" /></th><th>文件名</th><th>大小</th><th>修改日期</th><th></th></tr></thead>
             <tbody>
-              <tr v-for="f in fileList" :key="f.name">
+              <tr v-for="f in fileList" :key="f.name" :class="{ selected: selectedFiles.has(f.path) }">
+                <td class="sel-col"><input type="checkbox" :checked="selectedFiles.has(f.path)" @change="toggleSelect(f.path)" /></td>
                 <td>
                   <div class="file-cell">
                     <span class="file-ext" :class="getFileExt(f.name)">{{ getFileExt(f.name) }}</span>
@@ -439,6 +484,17 @@ watch(showNewDir, (v) => { if (v) setTimeout(() => newDirInput.value?.focus(), 5
         <div class="modal-footer">
           <button class="btn-secondary" @click="showDeleteConfirm = false">取消</button>
           <button class="btn-danger" @click="executeDelete">确认删除</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="showBatchDeleteConfirm" class="modal-overlay" @click.self="showBatchDeleteConfirm = false">
+      <div class="modal">
+        <div class="modal-header">确认批量删除</div>
+        <div class="modal-body"><p>确定要删除选中的 <strong>{{ selectedFiles.size }}</strong> 个文件吗？将级联删除关联的 Wiki 页面，且不可撤销。</p></div>
+        <div class="modal-footer">
+          <button class="btn-secondary" @click="showBatchDeleteConfirm = false" :disabled="batchDeleting">取消</button>
+          <button class="btn-danger" @click="executeBatchDelete" :disabled="batchDeleting">{{ batchDeleting ? '删除中...' : '确认删除' }}</button>
         </div>
       </div>
     </div>
@@ -549,8 +605,11 @@ watch(showNewDir, (v) => { if (v) setTimeout(() => newDirInput.value?.focus(), 5
 
 table { width: 100%; border-collapse: collapse; }
 thead th { text-align: left; padding: 10px 18px; border-bottom: 2px solid var(--border); color: var(--text-muted); font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+.sel-col { width: 32px; text-align: center; padding: 10px 8px !important; }
+.sel-col input { cursor: pointer; }
 tbody td { padding: 11px 18px; border-bottom: 1px solid var(--border-light); }
 tbody tr:hover { background: var(--bg-subtle); }
+tbody tr.selected { background: var(--accent-light); }
 tbody tr:last-child td { border-bottom: none; }
 
 .file-cell { display: flex; align-items: center; gap: 8px; }
