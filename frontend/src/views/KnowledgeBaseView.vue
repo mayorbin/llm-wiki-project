@@ -2,7 +2,7 @@
 /**
  * 知识库主页——文件管理器 + 知识查询。
  */
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { filesApi } from '@/api/files'
 import { ingestionApi } from '@/api/ingestion'
@@ -47,7 +47,40 @@ const showNewDir = ref(false)
 const newDirName = ref('')
 const creatingDir = ref(false)
 const ingesting = ref(false)
+const ingestTaskId = ref('')
+const ingestProgress = ref(0)
 const newDirInput = ref<HTMLInputElement | null>(null)
+
+let _pollTimer: ReturnType<typeof setInterval> | null = null
+
+function startTaskPolling(taskId: string) {
+  stopTaskPolling()
+  ingestTaskId.value = taskId
+  ingestProgress.value = 0
+  _pollTimer = setInterval(async () => {
+    try {
+      const res = await ingestionApi.getStatus(taskId)
+      const progress = res.data?.progress ?? 0
+      ingestProgress.value = progress
+      if (res.data?.status === 'completed' || res.data?.status === 'failed') {
+        stopTaskPolling()
+        if (res.data.status === 'completed') {
+          toastSuccess('摄入任务已完成')
+        } else {
+          toastError(res.data?.error_detail || '摄入任务失败')
+        }
+        loadDir()
+      }
+    } catch { /* polling error, ignore */ }
+  }, 2000)
+}
+
+function stopTaskPolling() {
+  if (_pollTimer) { clearInterval(_pollTimer); _pollTimer = null }
+  ingestTaskId.value = ''
+  ingestProgress.value = 0
+  ingesting.value = false
+}
 
 // 展开状态：默认展开根目录（path='' 即"全部文件"）
 const expandedDirs = ref<Set<string>>(new Set(['']))
@@ -127,11 +160,14 @@ async function handleIngest() {
   }
   ingesting.value = true
   try {
-    await ingestionApi.trigger(projectId, paths)
+    const res = await ingestionApi.trigger(projectId, paths)
+    const taskId = res.data?.task_id || res.data?.id
     toastSuccess(`已触发 ${paths.length} 个文件的摄入任务`)
+    if (taskId) startTaskPolling(taskId)
   } catch (e: any) {
     toastError(e.response?.data?.detail || '摄入失败')
-  } finally { ingesting.value = false }
+    ingesting.value = false
+  }
 }
 
 function confirmDeleteDir(dirPath: string) {
@@ -212,8 +248,10 @@ async function uploadFiles(files: File[]) {
     try {
       const s = await projectsApi.getSettings(projectId)
       if (s.data?.settings?.features?.auto_ingest_on_upload ?? true) {
-        await ingestionApi.trigger(projectId, uploadedPaths)
+        const res = await ingestionApi.trigger(projectId, uploadedPaths)
+        const taskId = res.data?.task_id || res.data?.id
         toastSuccess(`已自动摄入 ${uploadedPaths.length} 个文件`)
+        if (taskId) startTaskPolling(taskId)
       }
     } catch { /* 自动摄入失败不阻塞 */ }
   }
@@ -325,6 +363,7 @@ function getFileStem(name: string): string {
 }
 
 onMounted(loadDir)
+onUnmounted(stopTaskPolling)
 watch(currentDir, loadDir)
 watch(showNewDir, (v) => { if (v) setTimeout(() => newDirInput.value?.focus(), 50) })
 </script>
@@ -347,10 +386,16 @@ watch(showNewDir, (v) => { if (v) setTimeout(() => newDirInput.value?.focus(), 5
           </template>
         </div>
         <div class="fm-actions">
-          <template v-if="uploading">
+          <template v-if="uploading && !ingesting">
             <span class="upload-info">{{ uploadFileName }} {{ uploadFileIndex }}/{{ uploadTotalFiles }}</span>
             <div class="upload-bar-track">
               <div class="upload-bar-fill" :style="{ width: uploadProgress + '%' }" />
+            </div>
+          </template>
+          <template v-if="ingesting">
+            <span class="upload-info">摄入中...</span>
+            <div class="upload-bar-track">
+              <div class="upload-bar-fill" :style="{ width: ingestProgress + '%' }" />
             </div>
           </template>
           <template v-else>

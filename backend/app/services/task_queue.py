@@ -4,6 +4,7 @@ import json
 import uuid
 import logging
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 from app.storage.database import get_db
@@ -150,10 +151,11 @@ async def start_task_worker(poll_interval: float = 5.0):
                     logger.info("后台 worker 开始执行任务",
                         extra={"task_id": task_id, "action": action})
 
+                    # 在线程池中执行以避免阻塞 uvicorn 事件循环
                     if action == "ingest":
-                        _execute_ingest(task_id, project_id, file_paths)
+                        await asyncio.to_thread(_execute_ingest, task_id, project_id, file_paths)
                     elif action == "graph_build":
-                        _execute_graph_build(task_id, project_id)
+                        await asyncio.to_thread(_execute_graph_build, task_id, project_id)
 
                     update_task_status(task_id, "completed", progress=100)
                     logger.info("后台 worker 任务完成", extra={"task_id": task_id})
@@ -172,42 +174,34 @@ async def start_task_worker(poll_interval: float = 5.0):
         await asyncio.sleep(poll_interval)
 
 
-def _execute_ingest(task_id: str, project_id: str, file_paths: list[str]):
-    """执行单个摄入任务。"""
-    from app.config import get_settings
+def _ingest_single_file(fp: str, base_dir: Path, task_id: str, project_id: str) -> str:
+    """处理单个文件的摄入，返回文件路径供后续图谱重建。"""
     from app.storage.file_storage import safe_subdir
     from app.engines.llm_engine import call_llm_with_retry
 
-    settings = get_settings()
-    base_dir = Path(settings.data_dir) / "projects" / project_id
+    raw_path = safe_subdir(base_dir / "raw", fp)
+    if not raw_path.exists():
+        raise FileNotFoundError(f"源文件不存在: {fp}")
 
-    for fp in file_paths:
-        update_task_status(task_id, "running", progress=30)
-        raw_path = safe_subdir(base_dir / "raw", fp)
-        if not raw_path.exists():
-            raise FileNotFoundError(f"源文件不存在: {fp}")
+    # 读取文件内容——非 Markdown 文件先转换为文本
+    if raw_path.suffix == ".md":
+        content_str = raw_path.read_text(encoding="utf-8")
+    else:
+        try:
+            from app.engines.convert_engine import ConvertEngine
+            engine = ConvertEngine()
+            content_str = engine.convert(raw_path)
+        except Exception as e:
+            logger.warning("文件转换失败，回退到原始读取", extra={"file": fp, "error": str(e)})
+            content = raw_path.read_bytes()[:100*1024]
+            content_str = content.decode("utf-8", errors="replace")
 
-        # 读取文件内容——非 Markdown 文件先转换为文本
-        if raw_path.suffix == ".md":
-            content_str = raw_path.read_text(encoding="utf-8")
-        else:
-            try:
-                from app.engines.convert_engine import ConvertEngine
-                engine = ConvertEngine()
-                content_str = engine.convert(raw_path)
-            except Exception as e:
-                logger.warning("文件转换失败，回退到原始读取", extra={"file": fp, "error": str(e)})
-                content = raw_path.read_bytes()[:100*1024]
-                content_str = content.decode("utf-8", errors="replace")
+    # 调用 LLM 提取知识
+    wiki_dir = base_dir / "wiki"
+    wiki_dir.mkdir(parents=True, exist_ok=True)
+    index_content = (wiki_dir / "index.md").read_text(encoding="utf-8") if (wiki_dir / "index.md").exists() else ""
 
-        update_task_status(task_id, "running", progress=50)
-
-        # 调用 LLM 提取知识
-        wiki_dir = base_dir / "wiki"
-        wiki_dir.mkdir(parents=True, exist_ok=True)
-        index_content = (wiki_dir / "index.md").read_text(encoding="utf-8") if (wiki_dir / "index.md").exists() else ""
-
-        prompt = f"""处理以下源文件并提取关键知识构建 Wiki 页面。
+    prompt = f"""处理以下源文件并提取关键知识构建 Wiki 页面。
 
 文件路径: {fp}
 文件内容:
@@ -225,28 +219,28 @@ def _execute_ingest(task_id: str, project_id: str, file_paths: list[str]):
   "concepts": [{{"name":"概念名","description":"简述"}}]
 }}"""
 
-        result = call_llm_with_retry(prompt=prompt, task_id=task_id, project_id=project_id, max_tokens=4096)
-        update_task_status(task_id, "running", progress=70)
+    result = call_llm_with_retry(prompt=prompt, task_id=task_id, project_id=project_id, max_tokens=4096)
 
-        # 写入 wiki 页面
-        import json, re
-        try:
-            result = result.strip()
-            if result.startswith("```"):
-                result = result[result.index("\n"):].strip()
-            if result.endswith("```"):
-                result = result[:-3].strip()
-            data = json.loads(result)
-        except json.JSONDecodeError:
-            data = {"title": fp, "summary": result[:500], "key_claims": [], "entities": [], "concepts": []}
+    # 写入 wiki 页面
+    import json as _json
+    try:
+        result = result.strip()
+        if result.startswith("```"):
+            result = result[result.index("\n"):].strip()
+        if result.endswith("```"):
+            result = result[:-3].strip()
+        data = _json.loads(result)
+    except _json.JSONDecodeError:
+        data = {"title": fp, "summary": result[:500], "key_claims": [], "entities": [], "concepts": []}
 
-        from app.engines.wiki_engine import write_page, update_index, append_log
-        from datetime import datetime, timezone
+    from app.engines.wiki_engine import write_page, update_index, append_log
+    from datetime import datetime as _dt, timezone as _tz
+    import re as _re
 
-        slug = re.sub(r'[^a-zA-Z0-9一-鿿_-]', '-', data.get("title", fp)).lower()[:50]
-        now = datetime.now(timezone.utc).isoformat()
+    slug = _re.sub(r'[^a-zA-Z0-9一-鿿_-]', '-', data.get("title", fp)).lower()[:50]
+    now = _dt.now(_tz.utc).isoformat()
 
-        page_content = f"""---
+    page_content = f"""---
 title: "{data.get('title', fp)}"
 type: source
 tags: []
@@ -266,16 +260,16 @@ source_file: {fp}
 ## 概念
 {chr(10).join(f'- [[{c["name"]}]]: {c.get("description", "")}' for c in data.get('concepts', []))}
 """
-        write_page(wiki_dir / "sources" / f"{slug}.md", page_content)
-        update_index(wiki_dir, f"- [{data.get('title', fp)}](sources/{slug}.md) — {data.get('summary', '')[:60]}")
-        append_log(wiki_dir, f"## [{now[:10]}] ingest | {data.get('title', fp)}")
+    write_page(wiki_dir / "sources" / f"{slug}.md", page_content)
+    update_index(wiki_dir, f"- [{data.get('title', fp)}](sources/{slug}.md) — {data.get('summary', '')[:60]}")
+    append_log(wiki_dir, f"## [{now[:10]}] ingest | {data.get('title', fp)}")
 
-        # 创建实体和概念页面（使 wikilinks 可解析产生图谱边）
-        for ent in data.get('entities', []):
-            ent_slug = re.sub(r'[^a-zA-Z0-9一-鿿_-]', '-', ent.get('name', '')).lower()[:50]
-            ent_path = wiki_dir / "entities" / f"{ent_slug}.md"
-            if not ent_path.exists():
-                ent_content = f"""---
+    # 创建实体和概念页面（使 wikilinks 可解析产生图谱边）
+    for ent in data.get('entities', []):
+        ent_slug = _re.sub(r'[^a-zA-Z0-9一-鿿_-]', '-', ent.get('name', '')).lower()[:50]
+        ent_path = wiki_dir / "entities" / f"{ent_slug}.md"
+        if not ent_path.exists():
+            ent_content = f"""---
 title: "{ent.get('name', '')}"
 type: {ent.get('type', 'unknown')}
 tags: []
@@ -284,12 +278,12 @@ date: {now[:10]}
 # {ent.get('name', '')}
 {ent.get('description', '')[:200]}
 """
-                write_page(ent_path, ent_content)
-        for cpt in data.get('concepts', []):
-            cpt_slug = re.sub(r'[^a-zA-Z0-9一-鿿_-]', '-', cpt.get('name', '')).lower()[:50]
-            cpt_path = wiki_dir / "concepts" / f"{cpt_slug}.md"
-            if not cpt_path.exists():
-                cpt_content = f"""---
+            write_page(ent_path, ent_content)
+    for cpt in data.get('concepts', []):
+        cpt_slug = _re.sub(r'[^a-zA-Z0-9一-鿿_-]', '-', cpt.get('name', '')).lower()[:50]
+        cpt_path = wiki_dir / "concepts" / f"{cpt_slug}.md"
+        if not cpt_path.exists():
+            cpt_content = f"""---
 title: "{cpt.get('name', '')}"
 type: concept
 tags: []
@@ -298,32 +292,65 @@ date: {now[:10]}
 # {cpt.get('name', '')}
 {cpt.get('description', '')[:200]}
 """
-                write_page(cpt_path, cpt_content)
+            write_page(cpt_path, cpt_content)
 
-        update_task_status(task_id, "running", progress=90)
+    return fp
 
-        # 检查是否启用自动重建图谱
-        import json as _json
-        from app.storage.database import get_db as _get_db
-        should_rebuild = True  # 默认开启
-        try:
-            db = _get_db("users")
-            row = db.execute(
-                "SELECT settings FROM project_settings WHERE project_id = ?", (project_id,),
-            ).fetchone()
-            if row:
-                s = _json.loads(row["settings"])
-                should_rebuild = s.get("features", {}).get("auto_graph_rebuild", True)
-        except Exception:
-            pass
 
-        if should_rebuild:
-            from app.engines.graph_engine import GraphEngine
-            graph_dir = base_dir / "graph"
-            engine = GraphEngine(wiki_dir=wiki_dir, graph_dir=graph_dir)
-            engine.build(run_inference=True)
+def _execute_ingest(task_id: str, project_id: str, file_paths: list[str]):
+    """执行单个摄入任务——多文件并行处理。"""
+    from app.config import get_settings
 
-        update_task_status(task_id, "running", progress=100)
+    settings = get_settings()
+    base_dir = Path(settings.data_dir) / "projects" / project_id
+    total = len(file_paths)
+    done = 0
+
+    # 在线程池中并行处理文件（最多 3 个并发 LLM 调用）
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {
+            executor.submit(_ingest_single_file, fp, base_dir, task_id, project_id): fp
+            for fp in file_paths
+        }
+        for future in as_completed(futures):
+            fp = futures[future]
+            try:
+                future.result()
+                done += 1
+                progress = int(30 + (done / total) * 50)  # 30%-80%
+                update_task_status(task_id, "running", progress=progress)
+                logger.info("文件摄入完成", extra={"task_id": task_id, "file": fp, "done": done, "total": total})
+            except Exception as e:
+                logger.error("文件摄入失败", extra={"task_id": task_id, "file": fp, "error": str(e)})
+
+    if done == 0:
+        raise RuntimeError(f"所有 {total} 个文件摄入均失败")
+
+    update_task_status(task_id, "running", progress=85)
+
+    # 检查是否启用自动重建图谱
+    import json as _json
+    from app.storage.database import get_db as _get_db
+    should_rebuild = True
+    try:
+        db = _get_db("users")
+        row = db.execute(
+            "SELECT settings FROM project_settings WHERE project_id = ?", (project_id,),
+        ).fetchone()
+        if row:
+            s = _json.loads(row["settings"])
+            should_rebuild = s.get("features", {}).get("auto_graph_rebuild", True)
+    except Exception:
+        pass
+
+    if should_rebuild:
+        from app.engines.graph_engine import GraphEngine
+        wiki_dir = base_dir / "wiki"
+        graph_dir = base_dir / "graph"
+        engine = GraphEngine(wiki_dir=wiki_dir, graph_dir=graph_dir)
+        engine.build(run_inference=True)
+
+    update_task_status(task_id, "running", progress=100)
 
 
 def _execute_graph_build(task_id: str, project_id: str):
