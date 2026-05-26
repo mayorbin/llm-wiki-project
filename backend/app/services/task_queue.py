@@ -187,9 +187,18 @@ def _execute_ingest(task_id: str, project_id: str, file_paths: list[str]):
         if not raw_path.exists():
             raise FileNotFoundError(f"源文件不存在: {fp}")
 
-        # 读取文件内容
-        content = raw_path.read_text(encoding="utf-8") if raw_path.suffix == ".md" else raw_path.read_bytes()[:50*1024]
-        content_str = content if isinstance(content, str) else content.decode("utf-8", errors="replace")
+        # 读取文件内容——非 Markdown 文件先转换为文本
+        if raw_path.suffix == ".md":
+            content_str = raw_path.read_text(encoding="utf-8")
+        else:
+            try:
+                from app.engines.convert_engine import ConvertEngine
+                engine = ConvertEngine()
+                content_str = engine.convert(raw_path)
+            except Exception as e:
+                logger.warning("文件转换失败，回退到原始读取", extra={"file": fp, "error": str(e)})
+                content = raw_path.read_bytes()[:100*1024]
+                content_str = content.decode("utf-8", errors="replace")
 
         update_task_status(task_id, "running", progress=50)
 
