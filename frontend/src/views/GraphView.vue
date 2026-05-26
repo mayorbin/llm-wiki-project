@@ -69,11 +69,18 @@ function renderGraph(data: any) {
     node: {
       style: { labelText: (d: any) => d.data?.label || d.id, labelFill: '#1C1917', labelFontSize: 12, labelPlacement: 'bottom', labelOffsetY: 6 },
     },
-    layout: { type: 'force', preventOverlap: true, nodeStrength: -200, linkDistance: 120 },
+    layout: {
+      type: 'force', preventOverlap: true, nodeStrength: -200, linkDistance: 120,
+      animation: false,  // 禁用布局动画避免节点闪动
+    },
     behaviors: ['drag-canvas', 'zoom-canvas', 'drag-element'],
     autoFit: 'view',
+    animation: false,
   })
   graphInstance.render()
+  // 渲染完成后淡入画布
+  const canvas = document.getElementById('graph-canvas')
+  if (canvas) { canvas.style.opacity = '1' }
 }
 
 async function handleBuild() {
@@ -167,6 +174,6 @@ h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; margin-bottom: 2
 .filter-divider { width: 1px; height: 20px; background: var(--border); margin: 0 12px; }
 
 .canvas-wrap { position: relative; flex: 1; min-height: 460px; }
-.canvas { width: 100%; height: 100%; }
-.loading-state { display: flex; align-items: center; justify-content: center; height: 400px; color: var(--text-muted); font-size: 14px; }
+.canvas { width: 100%; height: 100%; opacity: 0; transition: opacity 0.4s ease; }
+.loading-state { display: flex; align-items: center; justify-content: center; height: 400px; color: var(--text-muted); font-size: 14px; transition: opacity 0.3s ease; }
 </style>
