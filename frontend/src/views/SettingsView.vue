@@ -2,7 +2,7 @@
 /**
  * 项目设置——LLM 配置 + 备份恢复 + 审计日志。
  */
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { projectsApi } from '@/api/projects'
 
@@ -15,6 +15,9 @@ const saved = ref(false)
 const auditLog = ref<any[]>([])
 const auditStatus = ref<'idle' | 'loading' | 'loaded' | 'error'>('idle')
 const auditError = ref('')
+const auditPage = ref(0)
+const auditTotal = ref(0)
+const pageSize = 20
 const showImport = ref(false)
 
 async function loadSettings() {
@@ -37,12 +40,13 @@ async function saveSettings() {
   finally { loading.value = false }
 }
 
-async function loadAuditLog() {
+async function loadAuditLog(page = 0) {
   auditStatus.value = 'loading'
   auditError.value = ''
   try {
     const token = localStorage.getItem('access_token')
-    const url = `/api/audit-log?project_id=${encodeURIComponent(projectId)}&limit=50`
+    const offset = page * pageSize
+    const url = `/api/audit-log?project_id=${encodeURIComponent(projectId)}&limit=${pageSize}&offset=${offset}`
     const res = await fetch(url, {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     })
@@ -54,6 +58,8 @@ async function loadAuditLog() {
     }
     const data = await res.json()
     auditLog.value = data.entries || []
+    auditTotal.value = data.total || 0
+    auditPage.value = page
     auditStatus.value = 'loaded'
   } catch {
     auditStatus.value = 'error'
@@ -61,6 +67,8 @@ async function loadAuditLog() {
     auditLog.value = []
   }
 }
+
+const totalPages = computed(() => Math.max(1, Math.ceil(auditTotal.value / pageSize)))
 
 async function handleExport() {
   const token = localStorage.getItem('access_token')
@@ -172,7 +180,7 @@ onMounted(() => { loadSettings(); loadAuditLog() })
 
       <div v-else-if="auditStatus === 'error'" style="padding:12px 0">
         <span style="color:var(--error-text);font-size:13px">{{ auditError }}</span>
-        <button class="btn-ghost" style="font-size:12px;margin-left:8px;padding:2px 8px" @click="loadAuditLog">重试</button>
+        <button class="btn-ghost" style="font-size:12px;margin-left:8px;padding:2px 8px" @click="loadAuditLog(0)">重试</button>
       </div>
 
       <div v-else-if="auditStatus === 'loaded' && auditLog.length === 0" style="color:var(--text-muted);font-size:13px;padding:12px 0">
@@ -180,13 +188,13 @@ onMounted(() => { loadSettings(); loadAuditLog() })
       </div>
 
       <div v-else-if="auditStatus === 'idle'" style="padding:12px 0">
-        <button class="btn-ghost" style="font-size:12px;padding:4px 12px" @click="loadAuditLog">加载操作记录</button>
+        <button class="btn-ghost" style="font-size:12px;padding:4px 12px" @click="loadAuditLog(0)">加载操作记录</button>
       </div>
 
       <table v-else-if="auditLog.length > 0">
         <thead><tr><th>时间</th><th>操作</th><th>用户</th><th>目标</th></tr></thead>
         <tbody>
-          <tr v-for="log in auditLog.slice(0, 30)" :key="log.id">
+          <tr v-for="log in auditLog" :key="log.id">
             <td class="time-col">{{ formatBeijingTime(log.timestamp) }}</td>
             <td><span class="badge badge-muted">{{ log.action }}</span></td>
             <td>{{ log.username }}</td>
@@ -194,6 +202,12 @@ onMounted(() => { loadSettings(); loadAuditLog() })
           </tr>
         </tbody>
       </table>
+
+      <div v-if="auditStatus === 'loaded' && auditTotal > pageSize" class="audit-pager">
+        <button class="btn-ghost" :disabled="auditPage === 0" @click="loadAuditLog(auditPage - 1)">上一页</button>
+        <span class="pager-info">{{ auditPage + 1 }} / {{ totalPages }}（共 {{ auditTotal }} 条）</span>
+        <button class="btn-ghost" :disabled="auditPage >= totalPages - 1" @click="loadAuditLog(auditPage + 1)">下一页</button>
+      </div>
     </div>
 
   </div>
@@ -249,6 +263,9 @@ table { font-size: 13px; }
   color: var(--text-secondary); font-size: 12px; max-width: 240px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+
+.audit-pager { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border-light); }
+.pager-info { font-size: 12px; color: var(--text-muted); }
 
 .save-bar { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border-light); }
 </style>
