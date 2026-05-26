@@ -37,6 +37,11 @@ async function loadGraph() {
   } finally { /* loading 已在 try/catch 中处理 */ }
 }
 
+function shortLabel(label: string, max = 10): string {
+  if (!label) return ''
+  return label.length > max ? label.slice(0, max) + '...' : label
+}
+
 function renderGraph(data: any) {
   if (graphInstance) { graphInstance.destroy(); graphInstance = null }
   const container = document.getElementById('graph-canvas')
@@ -53,27 +58,57 @@ function renderGraph(data: any) {
   if (!showInferred.value) hiddenEdges.push('INFERRED')
   const visibleEdges = data.edges.filter((e: any) => !hiddenEdges.includes(e.type) && ids.has(e.source) && ids.has(e.target))
 
+  // 计算节点度数用于差异化大小
+  const degree = new Map<string, number>()
+  for (const e of visibleEdges) {
+    degree.set(e.source, (degree.get(e.source) || 0) + 1)
+    degree.set(e.target, (degree.get(e.target) || 0) + 1)
+  }
+  const maxDeg = Math.max(1, ...Array.from(degree.values()))
+
+  const nodeData = visibleNodes.map((n: any) => {
+    const d = degree.get(n.id) || 0
+    const r = 10 + (d / maxDeg) * 16  // 半径 10~26px
+    return {
+      id: n.id,
+      data: { label: n.label || n.id, nodeType: n.type, community: n.community, degree: d },
+      style: { fill: n.communityColor || n.color || '#9E9E9E', r },
+    }
+  })
+
   graphInstance = new Graph({
     container: 'graph-canvas',
     width: container.clientWidth, height: container.clientHeight || 600,
     data: {
-      nodes: visibleNodes.map((n: any) => ({
-        id: n.id, data: { label: n.label || n.id, nodeType: n.type, community: n.community },
-        style: { fill: n.communityColor || n.color || '#9E9E9E' },
-      })),
+      nodes: nodeData,
       edges: visibleEdges.map((e: any) => ({
         source: e.source, target: e.target, data: { edgeType: e.type },
-        style: { stroke: e.type === 'INFERRED' ? '#FF5722' : '#94A3B8', lineWidth: e.type === 'INFERRED' ? 1.5 : 0.8, lineDash: e.type === 'INFERRED' ? [6, 4] : undefined },
+        style: { stroke: e.type === 'INFERRED' ? '#FF5722' : '#94A3B8', lineWidth: e.type === 'INFERRED' ? 1.5 : 0.8, lineDash: e.type === 'INFERRED' ? [6, 4] : undefined, opacity: 0.5 },
       })),
     },
     node: {
-      style: { labelText: (d: any) => d.data?.label || d.id, labelFill: '#1C1917', labelFontSize: 12, labelPlacement: 'bottom', labelOffsetY: 6 },
+      style: {
+        labelText: (d: any) => shortLabel(d.data?.label || d.id),
+        labelFill: '#1C1917', labelFontSize: 10, labelPlacement: 'bottom', labelOffsetY: 6,
+        labelMaxWidth: 80,
+      },
+      state: {
+        inactive: { opacity: 0.15 },
+        hover: { labelFontSize: 14, labelText: (d: any) => d.data?.label || d.id },
+      },
+    },
+    edge: {
+      state: { inactive: { opacity: 0.05 } },
     },
     layout: {
-      type: 'force', preventOverlap: true, nodeStrength: -200, linkDistance: 120,
-      animation: false,  // 禁用布局动画避免节点闪动
+      type: 'force', preventOverlap: true, nodeSize: 26,
+      nodeStrength: -600, linkDistance: 220, edgeStrength: 0.3,
+      animation: false,
     },
-    behaviors: ['drag-canvas', 'zoom-canvas', 'drag-element'],
+    behaviors: [
+      'drag-canvas', 'zoom-canvas', 'drag-element',
+      { type: 'hover-activate', degree: 1, direction: 'both', onHover: true },
+    ],
     autoFit: 'view',
     animation: false,
   })
