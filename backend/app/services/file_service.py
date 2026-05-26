@@ -412,24 +412,31 @@ def delete_file(project_id: str, user_id: str, file_path: str):
 
     relative_path = str(target.relative_to(base_dir)).replace("\\", "/")
 
-    # 级联：删除关联的 Wiki 页面
+    # 级联：删除关联的 Wiki 页面（通过 frontmatter source_file 匹配）
     wiki_dir = base_dir.parent / "wiki"
     if wiki_dir.exists():
-        from app.engines.wiki_engine import remove_from_index, append_log
-        slug = Path(relative_path).stem
-        slug = __import__('re').sub(r'[^a-zA-Z0-9一-鿿_-]', '-', slug).lower()[:50]
-        wiki_page = wiki_dir / "sources" / f"{slug}.md"
-        if wiki_page.exists():
-            wiki_page.unlink()
-            try:
-                remove_from_index(wiki_dir, slug, "sources")
-            except Exception:
-                pass
-            try:
-                now = datetime.now(timezone.utc).isoformat()
-                append_log(wiki_dir, f"## [{now[:10]}] delete | {relative_path}")
-            except Exception:
-                pass
+        from app.engines.wiki_engine import remove_from_index, append_log, read_page
+        import re as _re
+        sources_dir = wiki_dir / "sources"
+        if sources_dir.exists():
+            for wiki_page in sources_dir.glob("*.md"):
+                try:
+                    content = read_page(wiki_page)
+                    match = _re.search(r'(?m)^source_file:\s*(.+)$', content)
+                    if match and match.group(1).strip() == relative_path:
+                        wiki_page.unlink()
+                        try:
+                            remove_from_index(wiki_dir, wiki_page.stem, "sources")
+                        except Exception:
+                            pass
+                        try:
+                            now = datetime.now(timezone.utc).isoformat()
+                            append_log(wiki_dir, f"## [{now[:10]}] delete | {relative_path}")
+                        except Exception:
+                            pass
+                        break
+                except Exception:
+                    pass
 
     # 级联：标记关联摄入任务
     tasks_db = get_db("tasks")
