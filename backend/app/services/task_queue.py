@@ -270,6 +270,36 @@ source_file: {fp}
         update_index(wiki_dir, f"- [{data.get('title', fp)}](sources/{slug}.md) — {data.get('summary', '')[:60]}")
         append_log(wiki_dir, f"## [{now[:10]}] ingest | {data.get('title', fp)}")
 
+        # 创建实体和概念页面（使 wikilinks 可解析产生图谱边）
+        for ent in data.get('entities', []):
+            ent_slug = re.sub(r'[^a-zA-Z0-9一-鿿_-]', '-', ent.get('name', '')).lower()[:50]
+            ent_path = wiki_dir / "entities" / f"{ent_slug}.md"
+            if not ent_path.exists():
+                ent_content = f"""---
+title: "{ent.get('name', '')}"
+type: {ent.get('type', 'unknown')}
+tags: []
+date: {now[:10]}
+---
+# {ent.get('name', '')}
+{ent.get('description', '')[:200]}
+"""
+                write_page(ent_path, ent_content)
+        for cpt in data.get('concepts', []):
+            cpt_slug = re.sub(r'[^a-zA-Z0-9一-鿿_-]', '-', cpt.get('name', '')).lower()[:50]
+            cpt_path = wiki_dir / "concepts" / f"{cpt_slug}.md"
+            if not cpt_path.exists():
+                cpt_content = f"""---
+title: "{cpt.get('name', '')}"
+type: concept
+tags: []
+date: {now[:10]}
+---
+# {cpt.get('name', '')}
+{cpt.get('description', '')[:200]}
+"""
+                write_page(cpt_path, cpt_content)
+
         update_task_status(task_id, "running", progress=90)
 
         # 检查是否启用自动重建图谱
@@ -291,7 +321,7 @@ source_file: {fp}
             from app.engines.graph_engine import GraphEngine
             graph_dir = base_dir / "graph"
             engine = GraphEngine(wiki_dir=wiki_dir, graph_dir=graph_dir)
-            engine.build(run_inference=False)
+            engine.build(run_inference=True)
 
         update_task_status(task_id, "running", progress=100)
 

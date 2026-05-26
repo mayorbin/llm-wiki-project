@@ -66,6 +66,9 @@ function renderGraph(data: any) {
         style: { stroke: e.type === 'INFERRED' ? '#FF5722' : '#94A3B8', lineWidth: e.type === 'INFERRED' ? 1.5 : 0.8, lineDash: e.type === 'INFERRED' ? [6, 4] : undefined },
       })),
     },
+    node: {
+      style: { labelText: (d: any) => d.data?.label || d.id, labelFill: '#1C1917', labelFontSize: 12, labelPlacement: 'bottom', labelOffsetY: 6 },
+    },
     layout: { type: 'force', preventOverlap: true, nodeStrength: -200, linkDistance: 120 },
     behaviors: ['drag-canvas', 'zoom-canvas', 'drag-element'],
     autoFit: 'view',
