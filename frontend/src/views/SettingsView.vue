@@ -17,7 +17,7 @@ const auditStatus = ref<'idle' | 'loading' | 'loaded' | 'error'>('idle')
 const auditError = ref('')
 const auditPage = ref(0)
 const auditTotal = ref(0)
-const pageSize = 20
+const pageSize = 10
 const showImport = ref(false)
 
 async function loadSettings() {
