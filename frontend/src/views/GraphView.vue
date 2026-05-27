@@ -107,7 +107,7 @@ function renderGraph(data: any) {
     },
     behaviors: [
       'drag-canvas', 'zoom-canvas', 'drag-element',
-      { type: 'hover-activate', degree: 1, direction: 'both', onHover: true },
+      { type: 'hover-activate', degree: 1, direction: 'both' },
     ],
     autoFit: 'view',
     animation: false,
