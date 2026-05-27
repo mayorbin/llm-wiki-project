@@ -7,6 +7,15 @@ export const knowledgeApi = {
   query(projectId: string, question: string, model?: string) {
     return client.post('/knowledge/query', { project_id: projectId, question, model }, { timeout: 300000 })
   },
+  /** 流式查询——返回 fetch Response，调用方通过 reader 逐条读取 SSE 事件 */
+  queryStream(projectId: string, question: string, model?: string) {
+    const token = localStorage.getItem('access_token')
+    const params = new URLSearchParams({ project_id: projectId, question })
+    if (model) params.set('model', model)
+    return fetch(`/api/knowledge/query/stream?${params}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+  },
   /** Wiki 页面树（按类型分组） */
   getPages(projectId: string, type?: string) {
     return client.get('/knowledge/pages', { params: { project_id: projectId, type } })

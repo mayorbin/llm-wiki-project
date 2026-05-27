@@ -304,25 +304,92 @@ async function executeBatchDelete() {
 }
 
 const queryErrorHint = ref('')
+const queryPhase = ref('')
+const queryPhaseMsg = ref('')
+const queryProgress = ref({ done: 0, total: 0 })
+const queryStreaming = ref(false)
 
 async function handleQuery() {
   if (!queryText.value.trim()) return
   queryLoading.value = true
   queryError.value = false
   queryErrorHint.value = ''
+  queryResult.value = ''
+  queryPhase.value = ''
+  queryPhaseMsg.value = ''
+  queryProgress.value = { done: 0, total: 0 }
+  queryStreaming.value = false
+
   try {
-    const res = await knowledgeApi.query(projectId, queryText.value)
-    const answer = res.data?.answer || ''
-    queryResult.value = answer
-    if (answer.startsWith('查询失败')) {
-      queryError.value = true
-      queryErrorHint.value = buildErrorHint(answer)
+    const response = await knowledgeApi.queryStream(projectId, queryText.value)
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }))
+      throw new Error(err.detail || `请求失败 (${response.status})`)
+    }
+
+    const reader = response.body!.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+
+      // 解析 SSE 事件（以 \n\n 分隔）
+      const parts = buffer.split('\n\n')
+      buffer = parts.pop() || ''  // 最后一段可能不完整，留到下轮
+
+      for (const part of parts) {
+        if (!part.trim()) continue
+        const event: Record<string, string> = {}
+        for (const line of part.split('\n')) {
+          const colon = line.indexOf(':')
+          if (colon > 0) {
+            const key = line.slice(0, colon).trim()
+            const val = line.slice(colon + 1).trim()
+            event[key] = val
+          }
+        }
+        const type = event.event || 'message'
+        let data: any = {}
+        try { data = JSON.parse(event.data || '{}') } catch { /* ignore */ }
+
+        switch (type) {
+          case 'phase':
+            queryPhase.value = data.phase
+            queryPhaseMsg.value = data.message || ''
+            if (data.total) queryProgress.value = { done: 0, total: data.total }
+            break
+          case 'progress':
+            queryProgress.value = { done: data.done, total: data.total }
+            break
+          case 'content':
+            if (!queryStreaming.value) queryStreaming.value = true
+            queryResult.value += data.text || ''
+            break
+          case 'done':
+            queryPhase.value = 'done'
+            queryLoading.value = false
+            queryStreaming.value = false
+            break
+          case 'error':
+            queryError.value = true
+            queryErrorHint.value = buildErrorHint(data.message || '')
+            queryLoading.value = false
+            queryStreaming.value = false
+            break
+        }
+      }
     }
   } catch (e: any) {
-    queryResult.value = e.response?.data?.detail || e.message || '未知错误'
+    queryResult.value = e.message || '网络错误'
     queryError.value = true
     queryErrorHint.value = buildErrorHint(queryResult.value)
-  } finally { queryLoading.value = false }
+  } finally {
+    queryLoading.value = false
+    queryStreaming.value = false
+  }
 }
 
 function buildErrorHint(msg: string): string {
@@ -508,7 +575,19 @@ watch(showNewDir, (v) => { if (v) setTimeout(() => newDirInput.value?.focus(), 5
           <input v-model="queryText" placeholder="输入问题，例如：这些文档的核心主题是什么？" @keyup.enter="handleQuery" class="query-input" />
           <button class="btn-primary" :disabled="queryLoading" @click="handleQuery">{{ queryLoading ? '查询中...' : '查询' }}</button>
         </div>
-        <div v-if="queryResult" class="query-result card" :class="{ 'query-error': queryError }">
+        <!-- 进度指示 -->
+        <div v-if="queryLoading && queryPhase" class="query-progress card">
+          <div class="query-phase-row">
+            <span class="phase-spinner" />
+            <span class="phase-msg">{{ queryPhaseMsg }}</span>
+          </div>
+          <div v-if="queryProgress.total > 0" class="progress-bar-wrap">
+            <div class="progress-bar-fill" :style="{ width: (queryProgress.done / queryProgress.total * 100) + '%' }" />
+            <span class="progress-bar-text">{{ queryProgress.done }} / {{ queryProgress.total }}</span>
+          </div>
+        </div>
+        <!-- 流式回答 -->
+        <div v-if="queryResult" class="query-result card" :class="{ 'query-error': queryError, 'query-streaming': queryStreaming }">
           <template v-if="queryError">
             <div class="query-error-title">查询失败</div>
             <div class="query-error-body" v-html="renderMarkdown(queryResult, projectId)" />
@@ -698,4 +777,30 @@ tbody tr:last-child td { border-bottom: none; }
 }
 .query-error-action { font-size: 13px; }
 .query-error-action a { font-weight: 500; }
+
+/* 流式查询进度 */
+.query-progress { padding: 18px 22px; margin-bottom: 12px; }
+.query-phase-row { display: flex; align-items: center; gap: 10px; }
+.phase-spinner {
+  width: 16px; height: 16px; flex-shrink: 0;
+  border: 2.5px solid var(--border); border-top-color: var(--accent);
+  border-radius: 50%; animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.phase-msg { font-size: 14px; color: var(--text-secondary); }
+.progress-bar-wrap {
+  position: relative; margin-top: 12px;
+  height: 6px; border-radius: 100px;
+  background: var(--bg-subtle); overflow: hidden;
+}
+.progress-bar-fill {
+  height: 100%; border-radius: 100px;
+  background: linear-gradient(90deg, var(--accent), #F97316);
+  transition: width 0.4s ease;
+}
+.progress-bar-text {
+  position: absolute; right: 0; top: -20px;
+  font-size: 12px; color: var(--text-muted);
+}
+.query-streaming .query-result { border-color: var(--accent); }
 </style>
