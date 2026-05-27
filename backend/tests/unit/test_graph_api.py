@@ -98,7 +98,7 @@ class TestGraphStats:
     def test_获取统计信息(self):
         """应能获取图谱统计信息。"""
         user, project = _create_user_and_project("carol", "Proj")
-        _create_test_page(project["id"], "sources/Page1.md", "# Page 1\nContent")
+        _create_test_page(project["id"], "sources/Page1.md", "# Page 1\nSee [[Idea]] for details.")
         _create_test_page(project["id"], "concepts/Idea.md", "# Idea\nDetails")
 
         svc.build_graph(project["id"], user.id, run_inference=False)

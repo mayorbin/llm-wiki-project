@@ -341,6 +341,47 @@ class GraphEngine:
 
         all_edges = extracted_edges + inferred_edges
 
+        # 清理孤立 entity / concept 页面（没有任何边连接的 → 孤儿节点）
+        # 构建 stem → node_id 映射，用于将 edge 的 wikilink 名称解析为节点 ID
+        stem_to_ids: dict[str, list[str]] = {}
+        for p in pages:
+            stem_to_ids.setdefault(p.stem.lower(), []).append(_node_id(p, self.wiki_dir))
+        connected_ids: set[str] = set()
+        for e in all_edges:
+            connected_ids.add(e["source"])
+            for nid in stem_to_ids.get(e["target"].lower(), []):
+                connected_ids.add(nid)
+        for section in ("entities", "concepts"):
+            section_dir = self.wiki_dir / section
+            if section_dir.exists():
+                for page in list(section_dir.glob("*.md")):
+                    node_id = _node_id(page, self.wiki_dir)
+                    if node_id not in connected_ids:
+                        page.unlink()
+                        try:
+                            from app.engines.wiki_engine import remove_from_index
+                            remove_from_index(self.wiki_dir, page.stem, section)
+                        except Exception:
+                            pass
+                        logger.info("已清理孤立%s页面", section, extra={"page": str(page)})
+
+        # 清理后重建节点列表（可能有页面被删除了）
+        pages = [p for p in self.wiki_dir.rglob("*.md")
+                 if p.name not in META_FILES]
+        nodes = []
+        for page_path in pages:
+            node_id = _node_id(page_path, self.wiki_dir)
+            ptype = _page_type(page_path, self.wiki_dir)
+            label = _node_label(page_path)
+            nodes.append({
+                "id": node_id,
+                "label": label,
+                "type": ptype,
+                "color": TYPE_COLORS.get(ptype, TYPE_COLORS["unknown"]),
+                "path": str(page_path.relative_to(self.wiki_dir)).replace("\\", "/"),
+            })
+        nodes.sort(key=lambda n: n["id"])
+
         # Pass 3: 社区检测
         communities = self.detect_communities(nodes, all_edges)
 

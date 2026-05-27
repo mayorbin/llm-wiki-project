@@ -455,7 +455,7 @@ def delete_file(project_id: str, user_id: str, file_path: str):
         engine = GraphEngine(wiki_dir=wd, graph_dir=graph_dir)
         engine.build(run_inference=False)
     except Exception:
-        pass
+        logger.exception("删除文件后图谱重建失败", extra={"project_id": project_id, "file": relative_path})
 
     logger.info("文件已删除（级联）", extra={"project_id": project_id, "file": relative_path})
 
