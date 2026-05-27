@@ -246,6 +246,36 @@ def _discover_documents(question: str, project_id: str) -> tuple[list[Path], lis
 
     return raw_files, matched_labels
 
+_TEXT_SUFFIXES = {'.md', '.txt', '.csv', '.json', '.yaml', '.yml', '.xml', '.html', '.htm'}
+
+
+def _read_file_content(raw_path: Path) -> str:
+    """读取原始文件内容（非文本文件先经 ConvertEngine 转换）。
+
+    Args:
+        raw_path: 原始文件的绝对路径
+
+    Returns:
+        文件文本内容（截断至 30000 字符）
+    """
+    suffix = raw_path.suffix.lower()
+    if suffix in _TEXT_SUFFIXES:
+        try:
+            content = raw_path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            content = raw_path.read_bytes()[:100 * 1024].decode("utf-8", errors="replace")
+    else:
+        try:
+            from app.engines.convert_engine import ConvertEngine
+            engine = ConvertEngine()
+            content = engine.convert(raw_path)
+        except Exception as e:
+            logger.warning("文件转换失败，回退到原始读取",
+                extra={"file": str(raw_path), "error": str(e)})
+            content = raw_path.read_bytes()[:100 * 1024].decode("utf-8", errors="replace")
+
+    return content[:30000]
+
 
 def _project_wiki_dir(project_id: str) -> Path:
     """获取项目的 wiki/ 目录路径。"""
