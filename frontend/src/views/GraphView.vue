@@ -234,7 +234,8 @@ h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; margin-bottom: 2
   position: absolute; z-index: 100; pointer-events: none;
   padding: 5px 10px; border-radius: var(--radius-sm);
   background: rgba(255,255,255,0.94); color: var(--text-primary);
-  font-size: 13px; font-weight: 500; white-space: nowrap;
+  font-size: 13px; font-weight: 500; max-width: 260px;
+  word-break: break-all;
   box-shadow: var(--shadow); border: 1px solid var(--border);
   transform: translate(0, -50%);
 }
