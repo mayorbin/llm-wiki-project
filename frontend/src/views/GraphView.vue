@@ -83,11 +83,12 @@ function renderGraph(data: any) {
     },
     node: {
       style: {
-        labelText: '',
-        labelFill: '#1C1917', labelFontSize: 11, labelPlacement: 'bottom', labelOffsetY: 6,
+        labelText: (d: any) => (d.data?.label || '').slice(0, 8),
+        labelFill: '#1C1917', labelFontSize: 10, labelPlacement: 'bottom', labelOffsetY: 6,
+        labelMaxWidth: 70,
       },
     },
-    edge: { style: { opacity: 0.25 } },
+    edge: { style: { opacity: 0.2, lineWidth: 0.6 } },
     layout: {
       type: 'force', preventOverlap: true, nodeSize: 26,
       nodeStrength: -600, linkDistance: 220, edgeStrength: 0.3,
@@ -95,57 +96,10 @@ function renderGraph(data: any) {
     },
     behaviors: [
       'drag-canvas', 'zoom-canvas', 'drag-element',
+      { type: 'hover-activate', degree: 1, direction: 'both' },
     ],
     autoFit: 'view',
     animation: false,
-  })
-
-  // hover 交互：用 updateNodeData/updateEdgeData 直接改样式
-  graphInstance.on('node:pointerenter', (evt: any) => {
-    const nodeId = evt.target?.id
-    if (!nodeId || !graphInstance) return
-    const neighbors = new Set<string>()
-    graphInstance.getEdgeData().forEach((e: any) => {
-      if (e.source === nodeId) neighbors.add(e.target)
-      if (e.target === nodeId) neighbors.add(e.source)
-    })
-
-    const nodeUpdates: any[] = []
-    graphInstance!.getNodeData().forEach((n: any) => {
-      const label = n.data?.label || n.id || ''
-      if (n.id === nodeId) {
-        nodeUpdates.push({
-          id: n.id,
-          style: { stroke: '#1C1917', lineWidth: 2, labelText: label, labelFontSize: 13 },
-        })
-      } else if (!neighbors.has(n.id)) {
-        nodeUpdates.push({ id: n.id, style: { opacity: 0.08, labelText: '' } })
-      } else {
-        nodeUpdates.push({ id: n.id, style: { opacity: 1, labelText: '' } })
-      }
-    })
-    graphInstance!.updateNodeData(nodeUpdates)
-
-    const edgeUpdates: any[] = []
-    graphInstance!.getEdgeData().forEach((e: any) => {
-      const eid = e.id || `${e.source}-${e.target}`
-      if (e.source === nodeId || e.target === nodeId) {
-        edgeUpdates.push({ id: eid, style: { opacity: 0.7, lineWidth: 1.5 } })
-      } else {
-        edgeUpdates.push({ id: eid, style: { opacity: 0.02 } })
-      }
-    })
-    graphInstance!.updateEdgeData(edgeUpdates)
-    graphInstance!.draw()
-  })
-
-  graphInstance.on('node:pointerleave', () => {
-    if (!graphInstance) return
-    const nodeUpdates: any[] = graphInstance.getNodeData().map((n: any) => ({ id: n.id, style: { stroke: undefined, lineWidth: undefined, opacity: undefined, labelText: '' } }))
-    graphInstance.updateNodeData(nodeUpdates)
-    const edgeUpdates: any[] = graphInstance.getEdgeData().map((e: any) => ({ id: e.id || `${e.source}-${e.target}`, style: { opacity: 0.25, lineWidth: undefined } }))
-    graphInstance.updateEdgeData(edgeUpdates)
-    graphInstance.draw()
   })
 
   graphInstance.render()
