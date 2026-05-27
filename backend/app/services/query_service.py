@@ -14,9 +14,11 @@
 import json
 import uuid
 import logging
+import re
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Literal
 
 from app.config import get_settings
 from app.storage.database import get_db
@@ -24,7 +26,7 @@ from app.storage.file_storage import safe_subdir, atomic_write, sha256
 from app.engines.wiki_engine import (
     read_page, write_page, extract_wikilinks, all_wiki_pages,
     validate_wikilinks, read_index, write_index, update_index,
-    remove_from_index, append_log,
+    remove_from_index, append_log, META_FILES,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,6 +35,46 @@ logger = logging.getLogger(__name__)
 def _now() -> str:
     """返回当前 UTC 时间的 ISO 格式字符串。"""
     return datetime.now(timezone.utc).isoformat()
+
+
+# ── 两阶段检索 Prompt 模板 ──
+
+_STRUCTURE_KEYWORDS = [
+    "有哪些文档", "多少篇", "列出", "目录", "概述", "总共", "几个", "统计", "索引", "汇总",
+]
+
+_UNKNOWN_HINT = "未找到与问题直接相关的文档，以下为知识库概览：\n\n"
+
+_EXTRACTION_SYSTEM_PROMPT = """你是一个文本检索助手。从以下文档中提取与用户问题最相关的段落。
+保留原始数据和数值。如果文档中确实没有相关信息，返回空。"""
+
+_EXTRACTION_USER_PROMPT = """文档: {file_path}
+内容:
+{content}
+
+问题: {question}
+
+请提取与问题最相关的段落，按以下格式返回：
+---
+相关段落: <原文引用>
+来源位置: <段落所在章节或行号范围>
+---
+（可返回多个段落块。如果文档不包含相关信息，返回"无相关内容"。
+保留所有关键数据和表格信息。总计不超过 800 字。）"""
+
+_SYNTHESIS_SYSTEM_PROMPT = """根据以下从多个文档中提取的相关段落，综合回答用户问题。
+回答中使用 [[页面名]] 格式引用来源。每个关键事实附上来源标注。
+中文回答。如果段落信息不足以回答问题，诚实说明。"""
+
+_SYNTHESIS_USER_PROMPT = """相关段落:
+{combined_excerpts}
+
+可引用的 Wiki 页面（使用 [[页面名]] 格式引用）：
+{page_refs}
+
+问题: {question}
+
+综合以上信息回答（使用 [[wikilinks]] 引用来源）："""
 
 
 def _check_project_access(project_id: str, user_id: str):
