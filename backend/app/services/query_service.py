@@ -121,6 +121,132 @@ def _classify_question(question: str, wiki_dir: Path) -> Literal["simple", "cont
     return "unknown"
 
 
+def _discover_documents(question: str, project_id: str) -> tuple[list[Path], list[str]]:
+    """通过图谱社区发现定位相关的原始文件。
+
+    Args:
+        question: 用户问题
+        project_id: 项目 ID
+
+    Returns:
+        (raw_file_paths, matched_labels): 原始文件路径列表 + 匹配到的节点标签列表
+        文件路径列表可能为空（无匹配或图谱未构建）
+    """
+    settings = get_settings()
+    project_dir = Path(settings.data_dir) / "projects" / project_id
+    graph_file = project_dir / "graph" / "graph.json"
+    wiki_dir = project_dir / "wiki"
+
+    if not graph_file.exists():
+        logger.info("图谱未构建，跳过文档发现", extra={"project_id": project_id})
+        return [], []
+
+    graph = json.loads(graph_file.read_text(encoding="utf-8"))
+    nodes = graph.get("nodes", [])
+    edges = graph.get("edges", [])
+    if not nodes:
+        return [], []
+
+    # 计算 node degree（从 edges 统计各节点出现次数）
+    degree: dict[str, int] = {}
+    for e in edges:
+        degree[e["source"]] = degree.get(e["source"], 0) + 1
+        degree[e["target"]] = degree.get(e["target"], 0) + 1
+
+    # 构建 node_id → node 的索引
+    node_by_id: dict[str, dict] = {n["id"]: n for n in nodes}
+
+    # ── 节点匹配（三级优先级）──
+    matched_nodes: list[dict] = []
+
+    # 优先级 1：wikilinks 精确匹配 node.label
+    for link_name in extract_wikilinks(question):
+        for node in nodes:
+            if node.get("label") == link_name:
+                matched_nodes.append(node)
+
+    # 优先级 2：中文词或英文词模糊匹配 node.label
+    if not matched_nodes:
+        words = re.findall(r'[一-鿿]{2,}|[a-zA-Z]{2,}', question)
+        for w in words:
+            w_lower = w.lower()
+            for node in nodes:
+                label = (node.get("label") or "").lower()
+                if w_lower in label:
+                    matched_nodes.append(node)
+
+    # 优先级 3：与 source 节点 label 关键词重叠最多的
+    if not matched_nodes:
+        words_lower = [w.lower() for w in words]
+        best_node = None
+        best_score = 0
+        for node in nodes:
+            if node.get("type") != "source":
+                continue
+            label = (node.get("label") or "").lower()
+            score = sum(1 for w in words_lower if w in label)
+            if score > best_score:
+                best_score = score
+                best_node = node
+        if best_node:
+            matched_nodes.append(best_node)
+
+    if not matched_nodes:
+        return [], []
+
+    # ── 社区拉取 ──
+    candidate_source_ids: set[str] = set()
+    matched_labels: list[str] = []
+
+    for mn in matched_nodes:
+        matched_labels.append(mn.get("label", mn["id"]))
+        community = mn.get("community", -1)
+
+        if community == -1:
+            # 孤立节点：仅用自身（如果是 source 类型）
+            if mn.get("type") == "source":
+                candidate_source_ids.add(mn["id"])
+        else:
+            # 同社区 source 节点 → 按 degree 降序取前 8
+            community_sources = [
+                n for n in nodes
+                if n.get("type") == "source" and n.get("community") == community
+            ]
+            community_sources.sort(key=lambda n: degree.get(n["id"], 0), reverse=True)
+            for n in community_sources[:8]:
+                candidate_source_ids.add(n["id"])
+
+    # ── 源文件定位 ──
+    raw_files: list[Path] = []
+    seen_raw_paths: set[str] = set()
+
+    for node_id in candidate_source_ids:
+        node = node_by_id.get(node_id)
+        if not node:
+            continue
+        # 读取 wiki 页面的 frontmatter 获取 source_file
+        wiki_page_path = wiki_dir / (node.get("path", node_id))
+        if not wiki_page_path.exists():
+            continue
+        content = read_page(wiki_page_path)
+        m = re.search(r'(?m)^source_file:\s*(.+)$', content)
+        raw_rel = m.group(1).strip() if m else None
+        if not raw_rel:
+            continue
+        raw_path = (project_dir / "raw" / raw_rel).resolve()
+        if raw_path.exists() and raw_path.is_file():
+            raw_key = str(raw_path)
+            if raw_key not in seen_raw_paths:
+                seen_raw_paths.add(raw_key)
+                raw_files.append(raw_path)
+
+    logger.info("图谱文档发现完成",
+        extra={"project_id": project_id, "matched": matched_labels,
+               "candidates": len(raw_files)})
+
+    return raw_files, matched_labels
+
+
 def _project_wiki_dir(project_id: str) -> Path:
     """获取项目的 wiki/ 目录路径。"""
     settings = get_settings()
