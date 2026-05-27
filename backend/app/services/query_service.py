@@ -109,7 +109,7 @@ def query_knowledge(
             page_path = wiki_dir / section / f"{link_name}.md"
             if page_path.exists():
                 content = read_page(page_path)
-                contexts.append(f"## {link_name}\n{content[:2000]}")
+                contexts.append(f"## {link_name}\n{content[:4000]}")
                 sources_list.append(f"{section}/{link_name}.md")
                 found = True
                 break
@@ -118,7 +118,7 @@ def query_knowledge(
             page_path = wiki_dir / f"{link_name}.md"
             if page_path.exists():
                 content = read_page(page_path)
-                contexts.append(f"## {link_name}\n{content[:2000]}")
+                contexts.append(f"## {link_name}\n{content[:4000]}")
                 sources_list.append(f"{link_name}.md")
 
     # 如果没有找到相关上下文，加载最近更新的几篇文章
@@ -132,7 +132,7 @@ def query_knowledge(
             rel_path = str(p.relative_to(wiki_dir)).replace("\\", "/")
             if rel_path not in sources_list:
                 content = read_page(p)
-                contexts.append(f"## {p.stem}\n{content[:1500]}")
+                contexts.append(f"## {p.stem}\n{content[:4000]}")
                 sources_list.append(rel_path)
 
     # 调用 LLM

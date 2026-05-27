@@ -205,16 +205,18 @@ def _ingest_single_file(fp: str, base_dir: Path, task_id: str, project_id: str) 
 
 文件路径: {fp}
 文件内容:
-{content_str[:10000]}
+{content_str[:30000]}
 
 当前 Wiki 索引:
 {index_content[:2000]}
 
-请以 JSON 格式返回:
+请以 JSON 格式返回，提取所有关键数据和表格信息:
 {{
   "title": "标题",
-  "summary": "2-3句摘要",
+  "summary": "3-5句摘要，涵盖核心论点、关键数据",
   "key_claims": ["关键观点1", "关键观点2"],
+  "key_data": [{{"label":"数据名称","value":"具体数值或内容"}}],
+  "tables": [{{"title":"表格标题","rows":[["列1","列2"],["值1","值2"]]}}],
   "entities": [{{"name":"实体名","type":"person/organization/project"}}],
   "concepts": [{{"name":"概念名","description":"简述"}}]
 }}"""
@@ -250,6 +252,12 @@ source_file: {fp}
 
 ## 摘要
 {data.get('summary', '')}
+
+## 关键数据
+{chr(10).join(f'- **{d.get("label", "")}**: {d.get("value", "")}' for d in data.get('key_data', []))}
+
+## 表格
+{chr(10).join(f'### {t.get("title", "表格")}\n' + chr(10).join('| ' + ' | '.join(r) + ' |' for r in t.get('rows', [])) for t in data.get('tables', []))}
 
 ## 关键观点
 {chr(10).join('- ' + c for c in data.get('key_claims', []))}
