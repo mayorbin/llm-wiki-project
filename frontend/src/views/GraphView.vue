@@ -122,13 +122,13 @@ function renderGraph(data: any) {
       states[n.id] = n.id === nodeId || neighbors.has(n.id) ? '' : 'dimmed'
     })
     states[nodeId] = 'hovered'
-    graphInstance.setElementState(states, { animation: false })
+    graphInstance.setElementState(states, false)
     const edgeStates: Record<string, string> = {}
     graphInstance.getEdgeData().forEach((e: any) => {
       const id = e.id || `${e.source}-${e.target}`
       edgeStates[id] = (e.source === nodeId || e.target === nodeId) ? '' : 'dimmed'
     })
-    graphInstance.setElementState(edgeStates, { animation: false })
+    graphInstance.setElementState(edgeStates, false)
   })
 
   graphInstance.on('node:pointerleave', () => {
@@ -139,7 +139,7 @@ function renderGraph(data: any) {
       const id = e.id || `${e.source}-${e.target}`
       states[id] = ''
     })
-    graphInstance.setElementState(states, { animation: false })
+    graphInstance.setElementState(states, false)
   })
 
   graphInstance.render()
