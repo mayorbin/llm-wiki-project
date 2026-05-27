@@ -59,7 +59,7 @@ function startTaskPolling(taskId: string) {
   ingestProgress.value = 0
   _pollTimer = setInterval(async () => {
     try {
-      const res = await ingestionApi.getStatus(taskId)
+      const res = await ingestionApi.getStatus(projectId, taskId)
       const progress = res.data?.progress ?? 0
       ingestProgress.value = progress
       if (res.data?.status === 'completed' || res.data?.status === 'failed') {

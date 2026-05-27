@@ -33,7 +33,7 @@ function getPollingInterval(step: number, status: string): number {
   }
 }
 
-export function useTaskPolling(taskId: string) {
+export function useTaskPolling(projectId: string, taskId: string) {
   const task = ref<TaskStatus | null>(null)
   const error = ref<string | null>(null)
   let timer: ReturnType<typeof setTimeout> | null = null
@@ -41,7 +41,7 @@ export function useTaskPolling(taskId: string) {
 
   async function poll() {
     try {
-      const res = await ingestionApi.getStatus(taskId)
+      const res = await ingestionApi.getStatus(projectId, taskId)
       task.value = res.data
       error.value = null
       retryCount = 0
