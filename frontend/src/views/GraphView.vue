@@ -37,11 +37,6 @@ async function loadGraph() {
   } finally { /* loading 已在 try/catch 中处理 */ }
 }
 
-function shortLabel(label: string, max = 10): string {
-  if (!label) return ''
-  return label.length > max ? label.slice(0, max) + '...' : label
-}
-
 function renderGraph(data: any) {
   if (graphInstance) { graphInstance.destroy(); graphInstance = null }
   const container = document.getElementById('graph-canvas')
@@ -88,13 +83,19 @@ function renderGraph(data: any) {
     },
     node: {
       style: {
-        labelText: (d: any) => shortLabel(d.data?.label || d.id),
-        labelFill: '#1C1917', labelFontSize: 10, labelPlacement: 'bottom', labelOffsetY: 6,
-        labelMaxWidth: 80,
+        // 默认不显示标签，hover 时通过 state 显示
+        labelText: '',
+        labelFill: '#1C1917', labelFontSize: 11, labelPlacement: 'bottom', labelOffsetY: 6,
       },
       state: {
         inactive: { opacity: 0.15 },
-        hover: { labelFontSize: 14, labelText: (d: any) => d.data?.label || d.id },
+        hover: {
+          labelText: (d: any) => d.data?.label || d.id,
+          labelFontSize: 13,
+          lineWidth: 2,
+          stroke: '#1C1917',
+          zIndex: 999,
+        },
       },
     },
     edge: {
