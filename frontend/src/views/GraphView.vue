@@ -22,6 +22,12 @@ const showConcept = ref(true)
 const showExtracted = ref(true)
 const showInferred = ref(true)
 
+// tooltip 状态
+const tooltipLabel = ref('')
+const tooltipX = ref(0)
+const tooltipY = ref(0)
+const tooltipVisible = ref(false)
+
 async function loadGraph() {
   loading.value = true; error.value = ''
   try {
@@ -82,11 +88,7 @@ function renderGraph(data: any) {
       })),
     },
     node: {
-      style: {
-        labelText: (d: any) => (d.data?.label || '').slice(0, 8),
-        labelFill: '#1C1917', labelFontSize: 10, labelPlacement: 'bottom', labelOffsetY: 6,
-        labelMaxWidth: 70,
-      },
+      style: { labelText: '' },
     },
     edge: { style: { opacity: 0.2, lineWidth: 0.6 } },
     layout: {
@@ -100,6 +102,24 @@ function renderGraph(data: any) {
     ],
     autoFit: 'view',
     animation: false,
+  })
+
+  // HTML tooltip 替代 G6 内置标签
+  const wrap = container.parentElement!
+  graphInstance.on('node:pointerenter', (evt: any) => {
+    const label = evt.target?.data?.label || evt.target?.id || ''
+    if (!label) return
+    tooltipLabel.value = label
+    tooltipVisible.value = true
+  })
+  graphInstance.on('node:pointermove', (evt: any) => {
+    if (!tooltipVisible.value) return
+    const rect = wrap.getBoundingClientRect()
+    tooltipX.value = evt.clientX - rect.left + 14
+    tooltipY.value = evt.clientY - rect.top - 10
+  })
+  graphInstance.on('node:pointerleave', () => {
+    tooltipVisible.value = false
   })
 
   graphInstance.render()
@@ -163,6 +183,7 @@ watch([showSource, showEntity, showConcept, showExtracted, showInferred], () => 
         </div>
         <div v-else-if="loading" class="loading-state">加载图谱数据...</div>
         <div v-else id="graph-canvas" class="canvas" />
+        <div v-if="tooltipVisible" class="graph-tooltip" :style="{ left: tooltipX + 'px', top: tooltipY + 'px' }">{{ tooltipLabel }}</div>
       </div>
     </div>
   </div>
@@ -197,7 +218,16 @@ h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; margin-bottom: 2
 .edge-line.solid { background: #94A3B8; } .edge-line.dash { background: repeating-linear-gradient(90deg, #FF5722 0px, #FF5722 3px, transparent 3px, transparent 5px); }
 .filter-divider { width: 1px; height: 20px; background: var(--border); margin: 0 12px; }
 
-.canvas-wrap { position: relative; flex: 1; min-height: 460px; }
+.canvas-wrap { position: relative; flex: 1; min-height: 460px; overflow: hidden; }
 .canvas { width: 100%; height: 100%; opacity: 0; transition: opacity 0.4s ease; }
+
+.graph-tooltip {
+  position: absolute; z-index: 100; pointer-events: none;
+  padding: 5px 10px; border-radius: var(--radius-sm);
+  background: rgba(255,255,255,0.94); color: var(--text-primary);
+  font-size: 13px; font-weight: 500; white-space: nowrap;
+  box-shadow: var(--shadow); border: 1px solid var(--border);
+  transform: translate(0, -50%);
+}
 .loading-state { display: flex; align-items: center; justify-content: center; height: 400px; color: var(--text-muted); font-size: 14px; transition: opacity 0.3s ease; }
 </style>
