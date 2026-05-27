@@ -86,16 +86,8 @@ function renderGraph(data: any) {
         labelText: '',
         labelFill: '#1C1917', labelFontSize: 11, labelPlacement: 'bottom', labelOffsetY: 6,
       },
-      state: {
-        hovered: {
-          labelText: (d: any) => d.data?.label || d.id,
-          labelFontSize: 13,
-          lineWidth: 2, stroke: '#1C1917',
-        },
-        dimmed: { opacity: 0.12 },
-      },
     },
-    edge: { state: { dimmed: { opacity: 0.04 } } },
+    edge: { style: { opacity: 0.25 } },
     layout: {
       type: 'force', preventOverlap: true, nodeSize: 26,
       nodeStrength: -600, linkDistance: 220, edgeStrength: 0.3,
@@ -108,7 +100,7 @@ function renderGraph(data: any) {
     animation: false,
   })
 
-  // 手动 hover：设置节点/边的 hovered/dimmed 状态
+  // hover 交互：用 updateNodeData/updateEdgeData 直接改样式
   graphInstance.on('node:pointerenter', (evt: any) => {
     const nodeId = evt.target?.id
     if (!nodeId || !graphInstance) return
@@ -117,29 +109,43 @@ function renderGraph(data: any) {
       if (e.source === nodeId) neighbors.add(e.target)
       if (e.target === nodeId) neighbors.add(e.source)
     })
-    const states: Record<string, string> = {}
-    graphInstance.getNodeData().forEach((n: any) => {
-      states[n.id] = n.id === nodeId || neighbors.has(n.id) ? '' : 'dimmed'
+
+    const nodeUpdates: any[] = []
+    graphInstance!.getNodeData().forEach((n: any) => {
+      const label = n.data?.label || n.id || ''
+      if (n.id === nodeId) {
+        nodeUpdates.push({
+          id: n.id,
+          style: { stroke: '#1C1917', lineWidth: 2, labelText: label, labelFontSize: 13 },
+        })
+      } else if (!neighbors.has(n.id)) {
+        nodeUpdates.push({ id: n.id, style: { opacity: 0.08, labelText: '' } })
+      } else {
+        nodeUpdates.push({ id: n.id, style: { opacity: 1, labelText: '' } })
+      }
     })
-    states[nodeId] = 'hovered'
-    graphInstance.setElementState(states, false)
-    const edgeStates: Record<string, string> = {}
-    graphInstance.getEdgeData().forEach((e: any) => {
-      const id = e.id || `${e.source}-${e.target}`
-      edgeStates[id] = (e.source === nodeId || e.target === nodeId) ? '' : 'dimmed'
+    graphInstance!.updateNodeData(nodeUpdates)
+
+    const edgeUpdates: any[] = []
+    graphInstance!.getEdgeData().forEach((e: any) => {
+      const eid = e.id || `${e.source}-${e.target}`
+      if (e.source === nodeId || e.target === nodeId) {
+        edgeUpdates.push({ id: eid, style: { opacity: 0.7, lineWidth: 1.5 } })
+      } else {
+        edgeUpdates.push({ id: eid, style: { opacity: 0.02 } })
+      }
     })
-    graphInstance.setElementState(edgeStates, false)
+    graphInstance!.updateEdgeData(edgeUpdates)
+    graphInstance!.draw({ animation: false })
   })
 
   graphInstance.on('node:pointerleave', () => {
     if (!graphInstance) return
-    const states: Record<string, string> = {}
-    graphInstance.getNodeData().forEach((n: any) => { states[n.id] = '' })
-    graphInstance.getEdgeData().forEach((e: any) => {
-      const id = e.id || `${e.source}-${e.target}`
-      states[id] = ''
-    })
-    graphInstance.setElementState(states, false)
+    const nodeUpdates: any[] = graphInstance.getNodeData().map((n: any) => ({ id: n.id, style: { stroke: undefined, lineWidth: undefined, opacity: undefined } }))
+    graphInstance.updateNodeData(nodeUpdates)
+    const edgeUpdates: any[] = graphInstance.getEdgeData().map((e: any) => ({ id: e.id || `${e.source}-${e.target}`, style: { opacity: 0.25, lineWidth: undefined } }))
+    graphInstance.updateEdgeData(edgeUpdates)
+    graphInstance.draw({ animation: false })
   })
 
   graphInstance.render()
