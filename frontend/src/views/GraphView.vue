@@ -136,16 +136,16 @@ function renderGraph(data: any) {
       }
     })
     graphInstance!.updateEdgeData(edgeUpdates)
-    graphInstance!.draw({ animation: false })
+    graphInstance!.draw()
   })
 
   graphInstance.on('node:pointerleave', () => {
     if (!graphInstance) return
-    const nodeUpdates: any[] = graphInstance.getNodeData().map((n: any) => ({ id: n.id, style: { stroke: undefined, lineWidth: undefined, opacity: undefined } }))
+    const nodeUpdates: any[] = graphInstance.getNodeData().map((n: any) => ({ id: n.id, style: { stroke: undefined, lineWidth: undefined, opacity: undefined, labelText: '' } }))
     graphInstance.updateNodeData(nodeUpdates)
     const edgeUpdates: any[] = graphInstance.getEdgeData().map((e: any) => ({ id: e.id || `${e.source}-${e.target}`, style: { opacity: 0.25, lineWidth: undefined } }))
     graphInstance.updateEdgeData(edgeUpdates)
-    graphInstance.draw({ animation: false })
+    graphInstance.draw()
   })
 
   graphInstance.render()
