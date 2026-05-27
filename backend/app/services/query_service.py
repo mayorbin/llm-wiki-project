@@ -88,6 +88,39 @@ def _check_project_access(project_id: str, user_id: str):
         raise PermissionError("项目不存在或无权访问")
 
 
+def _classify_question(question: str, wiki_dir: Path) -> Literal["simple", "content", "unknown"]:
+    """将用户问题分为三类：simple（结构查询）、content（内容检索）、unknown（无匹配）。
+
+    Args:
+        question: 用户问题文本
+        wiki_dir: wiki 目录路径
+
+    Returns:
+        "simple"  — 结构类关键词命中，走旧流程摘要直答
+        "content" — 含 wikilinks 或已知实体/概念名匹配，进入两阶段检索
+        "unknown" — 无任何匹配，走旧流程 + 提示
+    """
+    # 检查结构类关键词（问题开头 20 字符内）
+    q_head = question[:20]
+    for kw in _STRUCTURE_KEYWORDS:
+        if kw in q_head:
+            return "simple"
+
+    # 检查 wikilinks
+    if extract_wikilinks(question):
+        return "content"
+
+    # 检查是否命中已知实体/概念页面名（取词长 >= 2 的词做匹配）
+    existing_pages = all_wiki_pages(wiki_dir)
+    # 从问题中提取潜在实体名（长度 > 2 的中文词或 > 1 的英文词）
+    words = re.findall(r'[一-鿿]{2,}|[a-zA-Z]{2,}', question)
+    for w in words:
+        if w.lower() in existing_pages:
+            return "content"
+
+    return "unknown"
+
+
 def _project_wiki_dir(project_id: str) -> Path:
     """获取项目的 wiki/ 目录路径。"""
     settings = get_settings()
