@@ -394,6 +394,10 @@ def query_knowledge(
 ) -> dict:
     """使用 LLM 查询知识库。
 
+    简单问题 → 旧流程摘要直答（快速通道）
+    内容问题 → 图谱引导两阶段全文检索
+    未知问题 → 旧流程 + 提示
+
     Args:
         project_id: 项目 ID
         user_id: 当前用户 ID
@@ -406,6 +410,56 @@ def query_knowledge(
     _check_project_access(project_id, user_id)
 
     wiki_dir = _project_wiki_dir(project_id)
+    classification = _classify_question(question, wiki_dir)
+
+    # ── simple: 旧流程摘要直答 ──
+    if classification == "simple":
+        return _summary_query(project_id, question, wiki_dir, model)
+
+    # ── content: 图谱引导两阶段检索 ──
+    if classification == "content":
+        raw_files, matched_labels = _discover_documents(question, project_id)
+
+        if raw_files:
+            excerpts = _run_extraction(question, raw_files, project_id, model)
+
+            if excerpts:
+                answer = _synthesize_answer(
+                    question, excerpts, matched_labels, project_id, model,
+                )
+                answer_links = extract_wikilinks(answer)
+                return {
+                    "question": question,
+                    "answer": answer,
+                    "sources": [str(p) for p in raw_files],
+                    "references": answer_links,
+                    "searched_at": _now(),
+                }
+
+        # 文档发现或提取失败 → 回退到旧流程 + 提示
+        result = _summary_query(project_id, question, wiki_dir, model)
+        result["answer"] = _UNKNOWN_HINT + result["answer"]
+        return result
+
+    # ── unknown: 旧流程 + 提示 ──
+    result = _summary_query(project_id, question, wiki_dir, model)
+    result["answer"] = _UNKNOWN_HINT + result["answer"]
+    return result
+
+
+def _summary_query(project_id: str, question: str, wiki_dir: Path,
+                   model: Optional[str]) -> dict:
+    """旧流程：基于 wiki 摘要页面的查询（抽取自原 query_knowledge 逻辑）。
+
+    Args:
+        project_id: 项目 ID
+        question: 用户问题
+        wiki_dir: wiki 目录路径
+        model: LLM 模型
+
+    Returns:
+        {question, answer, sources, references, searched_at}
+    """
     existing_pages = all_wiki_pages(wiki_dir)
 
     # 提取问题中的 wikilinks
@@ -439,7 +493,6 @@ def query_knowledge(
                 found = True
                 break
         if not found:
-            # 在 wiki/ 根目录查找
             page_path = wiki_dir / f"{link_name}.md"
             if page_path.exists():
                 content = read_page(page_path)
@@ -450,7 +503,7 @@ def query_knowledge(
     if len(contexts) <= 1:
         all_pages = sorted(
             [p for p in wiki_dir.rglob("*.md")
-             if p.name not in ("index.md", "log.md", "overview.md", "lint-report.md", "health-report.md")],
+             if p.name not in META_FILES],
             key=lambda p: p.stat().st_mtime, reverse=True,
         )
         for p in all_pages[:5]:
@@ -483,7 +536,6 @@ def query_knowledge(
         logger.error("LLM 查询失败", extra={"project_id": project_id, "error": str(e)})
         answer = f"查询失败：{str(e)}"
 
-    # 提取回答中的 wikilinks 作为引用
     answer_links = extract_wikilinks(answer)
 
     return {
