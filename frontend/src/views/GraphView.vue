@@ -83,24 +83,19 @@ function renderGraph(data: any) {
     },
     node: {
       style: {
-        // 默认不显示标签，hover 时通过 state 显示
         labelText: '',
         labelFill: '#1C1917', labelFontSize: 11, labelPlacement: 'bottom', labelOffsetY: 6,
       },
       state: {
-        inactive: { opacity: 0.15 },
-        hover: {
+        hovered: {
           labelText: (d: any) => d.data?.label || d.id,
           labelFontSize: 13,
-          lineWidth: 2,
-          stroke: '#1C1917',
-          zIndex: 999,
+          lineWidth: 2, stroke: '#1C1917',
         },
+        dimmed: { opacity: 0.12 },
       },
     },
-    edge: {
-      state: { inactive: { opacity: 0.05 } },
-    },
+    edge: { state: { dimmed: { opacity: 0.04 } } },
     layout: {
       type: 'force', preventOverlap: true, nodeSize: 26,
       nodeStrength: -600, linkDistance: 220, edgeStrength: 0.3,
@@ -108,15 +103,48 @@ function renderGraph(data: any) {
     },
     behaviors: [
       'drag-canvas', 'zoom-canvas', 'drag-element',
-      { type: 'hover-activate', degree: 1, direction: 'both' },
     ],
     autoFit: 'view',
     animation: false,
   })
+
+  // 手动 hover：设置节点/边的 hovered/dimmed 状态
+  graphInstance.on('node:pointerenter', (evt: any) => {
+    const nodeId = evt.target?.id
+    if (!nodeId || !graphInstance) return
+    const neighbors = new Set<string>()
+    graphInstance.getEdgeData().forEach((e: any) => {
+      if (e.source === nodeId) neighbors.add(e.target)
+      if (e.target === nodeId) neighbors.add(e.source)
+    })
+    const states: Record<string, string> = {}
+    graphInstance.getNodeData().forEach((n: any) => {
+      states[n.id] = n.id === nodeId || neighbors.has(n.id) ? '' : 'dimmed'
+    })
+    states[nodeId] = 'hovered'
+    graphInstance.setElementState(states, { animation: false })
+    const edgeStates: Record<string, string> = {}
+    graphInstance.getEdgeData().forEach((e: any) => {
+      const id = e.id || `${e.source}-${e.target}`
+      edgeStates[id] = (e.source === nodeId || e.target === nodeId) ? '' : 'dimmed'
+    })
+    graphInstance.setElementState(edgeStates, { animation: false })
+  })
+
+  graphInstance.on('node:pointerleave', () => {
+    if (!graphInstance) return
+    const states: Record<string, string> = {}
+    graphInstance.getNodeData().forEach((n: any) => { states[n.id] = '' })
+    graphInstance.getEdgeData().forEach((e: any) => {
+      const id = e.id || `${e.source}-${e.target}`
+      states[id] = ''
+    })
+    graphInstance.setElementState(states, { animation: false })
+  })
+
   graphInstance.render()
-  // 渲染完成后淡入画布
-  const canvas = document.getElementById('graph-canvas')
-  if (canvas) { canvas.style.opacity = '1' }
+  const c = document.getElementById('graph-canvas')
+  if (c) { c.style.opacity = '1' }
 }
 
 async function handleBuild() {
