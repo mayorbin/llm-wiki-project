@@ -106,8 +106,10 @@ function renderGraph(data: any) {
 
   // HTML tooltip 替代 G6 内置标签
   const wrap = container.parentElement!
+  // G6 v5 的节点事件通过 canvas 上的 target 属性获取节点数据
   graphInstance.on('node:pointerenter', (evt: any) => {
-    const label = evt.target?.data?.label || evt.target?.id || ''
+    const target = evt?.target || evt?.targetShape
+    const label = target?.data?.label || target?.id || ''
     if (!label) return
     tooltipLabel.value = label
     tooltipVisible.value = true
@@ -120,6 +122,13 @@ function renderGraph(data: any) {
   })
   graphInstance.on('node:pointerleave', () => {
     tooltipVisible.value = false
+  })
+  // 同时监听 canvas 原生事件作为兜底
+  wrap.addEventListener('mousemove', (e: MouseEvent) => {
+    if (!tooltipVisible.value) return
+    const rect = wrap.getBoundingClientRect()
+    tooltipX.value = e.clientX - rect.left + 14
+    tooltipY.value = e.clientY - rect.top - 10
   })
 
   graphInstance.render()
@@ -218,7 +227,7 @@ h2 { font-size: 22px; font-weight: 700; letter-spacing: -0.4px; margin-bottom: 2
 .edge-line.solid { background: #94A3B8; } .edge-line.dash { background: repeating-linear-gradient(90deg, #FF5722 0px, #FF5722 3px, transparent 3px, transparent 5px); }
 .filter-divider { width: 1px; height: 20px; background: var(--border); margin: 0 12px; }
 
-.canvas-wrap { position: relative; flex: 1; min-height: 460px; overflow: hidden; }
+.canvas-wrap { position: relative; flex: 1; min-height: 460px; }
 .canvas { width: 100%; height: 100%; opacity: 0; transition: opacity 0.4s ease; }
 
 .graph-tooltip {
