@@ -124,6 +124,99 @@ def call_llm(
     return content or ""
 
 
+def call_llm_stream(
+    prompt: str,
+    system_prompt: str = "",
+    model: Optional[str] = None,
+    api_base: Optional[str] = None,
+    api_key: Optional[str] = None,
+    temperature: Optional[float] = None,
+    max_tokens: Optional[int] = None,
+    timeout: Optional[int] = None,
+    project_id: Optional[str] = None,
+):
+    """流式调用 LLM，逐 token 返回。
+
+    Args:
+        prompt: 用户提示词（必填）
+        system_prompt: 系统提示词
+        model: litellm 模型标识
+        api_base: API 地址
+        api_key: API 密钥
+        temperature: 温度参数
+        max_tokens: 最大输出 token 数
+        timeout: 超时秒数
+        project_id: 关联的项目 ID（日志用）
+
+    Yields:
+        每个 token 的文本内容（str）
+
+    Raises:
+        RuntimeError: litellm 未安装
+        Exception: litellm API 调用失败
+    """
+    settings = get_settings()
+
+    model = model or settings.llm_model
+    api_base = api_base or settings.llm_api_base
+    api_key = api_key or settings.llm_api_key
+    temperature = temperature if temperature is not None else settings.llm_temperature
+    max_tokens = max_tokens or settings.llm_max_tokens
+    timeout = timeout or settings.llm_timeout
+
+    try:
+        import litellm
+    except ImportError:
+        raise RuntimeError("litellm 未安装，请执行: pip install litellm")
+
+    t0 = time.time()
+
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
+    logger.info("LLM 流式调用开始",
+        extra={"project_id": project_id, "model": model, "prompt_len": len(prompt)})
+
+    kwargs: dict = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "stream": True,
+    }
+    if api_base:
+        kwargs["api_base"] = api_base
+    if api_key:
+        kwargs["api_key"] = api_key
+    if max_tokens:
+        kwargs["max_tokens"] = max_tokens
+    if timeout:
+        kwargs["timeout"] = timeout
+
+    if settings.llm_extra_headers:
+        kwargs["extra_headers"] = dict(settings.llm_extra_headers)
+
+    try:
+        response = litellm.completion(**kwargs)
+        token_count = 0
+        for chunk in response:
+            delta = chunk.choices[0].delta
+            content = getattr(delta, "content", None)
+            if content:
+                token_count += 1
+                yield content
+        elapsed = (time.time() - t0) * 1000
+        logger.info("LLM 流式调用完成",
+            extra={"project_id": project_id, "duration_ms": int(elapsed),
+                   "tokens": token_count})
+    except Exception as e:
+        elapsed = (time.time() - t0) * 1000
+        logger.error("LLM 流式调用失败",
+            extra={"project_id": project_id, "duration_ms": int(elapsed), "error": str(e)})
+        raise
+
+
 def call_llm_with_retry(
     prompt: str,
     max_retries: Optional[int] = None,

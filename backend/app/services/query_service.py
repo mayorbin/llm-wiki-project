@@ -15,10 +15,12 @@ import json
 import uuid
 import logging
 import re
+import queue
+import threading
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-from typing import Optional, Literal
+from typing import Optional, Literal, AsyncGenerator
 
 from app.config import get_settings
 from app.storage.database import get_db
@@ -445,6 +447,183 @@ def query_knowledge(
     result = _summary_query(project_id, question, wiki_dir, model)
     result["answer"] = _UNKNOWN_HINT + result["answer"]
     return result
+
+
+# ── 流式查询 ──
+
+
+async def query_knowledge_stream(
+    project_id: str, user_id: str, question: str,
+    model: Optional[str] = None,
+) -> AsyncGenerator[dict, None]:
+    """流式查询知识库，通过 SSE 事件推送进度和结果。
+
+    事件类型：
+      phase    — 进入新阶段 {"phase": "classify"|"discover"|"extract"|"synthesize", "message": "..."}
+      progress — 文件提取进度 {"done": N, "total": M, "file": "name"}
+      content  — 回答 token {"text": "..."}
+      done     — 查询完成 {"sources": [...], "references": [...]}
+      error    — 查询失败 {"message": "..."}
+
+    Args:
+        project_id: 项目 ID
+        user_id: 当前用户 ID
+        question: 用户问题
+        model: LLM 模型
+    """
+    _check_project_access(project_id, user_id)
+    wiki_dir = _project_wiki_dir(project_id)
+
+    # ── Phase 0: 问题分类 ──
+    yield {"event": "phase", "data": {"phase": "classify", "message": "正在分析问题..."}}
+    classification = _classify_question(question, wiki_dir)
+
+    # ── simple: 旧流程（非流式，但结果很快）──
+    if classification == "simple":
+        result = _summary_query(project_id, question, wiki_dir, model)
+        yield {"event": "content", "data": {"text": result["answer"]}}
+        yield {"event": "done", "data": {"sources": result["sources"],
+               "references": result["references"]}}
+        return
+
+    # ── unknown: 旧流程 + 提示 ──
+    if classification == "unknown":
+        result = _summary_query(project_id, question, wiki_dir, model)
+        yield {"event": "content", "data": {"text": _UNKNOWN_HINT + result["answer"]}}
+        yield {"event": "done", "data": {"sources": result["sources"]}}
+        return
+
+    # ── content: 两阶段检索 ──
+
+    # Phase 1: 图谱发现
+    yield {"event": "phase", "data": {"phase": "discover",
+           "message": "正在从知识图谱发现相关文档..."}}
+    raw_files, matched_labels = _discover_documents(question, project_id)
+
+    if not raw_files:
+        result = _summary_query(project_id, question, wiki_dir, model)
+        yield {"event": "content", "data": {"text": _UNKNOWN_HINT + result["answer"]}}
+        yield {"event": "done", "data": {"sources": result["sources"]}}
+        return
+
+    # Phase 2 Round 1: 并行提取（线程内执行，通过 queue 推送进度）
+    yield {"event": "phase", "data": {"phase": "extract",
+           "message": f"正在从 {len(raw_files)} 个文件中提取相关段落...",
+           "total": len(raw_files)},
+           }
+
+    from app.engines.llm_engine import call_llm
+
+    q: queue.Queue = queue.Queue()
+
+    def extraction_worker():
+        results: dict[str, str] = {}
+
+        def extract_one(fp: Path) -> tuple[str, str | None]:
+            try:
+                content = _read_file_content(fp)
+                if not content.strip():
+                    return (fp.name, None)
+                prompt = _EXTRACTION_USER_PROMPT.format(
+                    file_path=str(fp), content=content, question=question,
+                )
+                raw = call_llm(
+                    prompt=prompt, system_prompt=_EXTRACTION_SYSTEM_PROMPT,
+                    model=model, project_id=project_id, timeout=120, max_tokens=1024,
+                )
+                if not raw.strip() or "无相关内容" in raw:
+                    return (fp.name, None)
+                return (fp.name, raw.strip())
+            except Exception as e:
+                logger.warning("文件段落提取失败",
+                    extra={"file": str(fp), "error": str(e)})
+                return (fp.name, None)
+
+        done_count = 0
+        total = len(raw_files)
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {executor.submit(extract_one, fp): fp for fp in raw_files}
+            for future in as_completed(futures):
+                name, text = future.result()
+                done_count += 1
+                q.put({"type": "progress", "done": done_count, "total": total, "file": name})
+                if text:
+                    results[name] = text
+        q.put({"type": "extract_done", "results": results})
+
+    thread = threading.Thread(target=extraction_worker)
+    thread.start()
+
+    # 从 queue 读取进度事件
+    excerpts: dict[str, str] = {}
+    loop = __import__("asyncio").get_event_loop()
+    while True:
+        msg = await loop.run_in_executor(None, q.get)
+        if msg["type"] == "progress":
+            yield {"event": "progress", "data": {
+                "done": msg["done"], "total": msg["total"], "file": msg["file"],
+            }}
+        elif msg["type"] == "extract_done":
+            excerpts = msg["results"]
+            break
+    thread.join()
+
+    if not excerpts:
+        result = _summary_query(project_id, question, wiki_dir, model)
+        yield {"event": "content", "data": {"text": _UNKNOWN_HINT + result["answer"]}}
+        yield {"event": "done", "data": {"sources": result["sources"]}}
+        return
+
+    # Phase 2 Round 2: 流式综合回答
+    yield {"event": "phase", "data": {"phase": "synthesize", "message": "正在综合回答..."}}
+
+    parts = []
+    for fname, text in excerpts.items():
+        parts.append(f"### 来源: {fname}\n{text}")
+    combined = "\n\n---\n\n".join(parts)
+    page_refs = "\n".join(f"- [[{label}]]" for label in matched_labels) if matched_labels else "(无)"
+    full_prompt = _SYNTHESIS_USER_PROMPT.format(
+        combined_excerpts=combined, page_refs=page_refs, question=question,
+    )
+
+    from app.engines.llm_engine import call_llm_stream
+
+    synthesis_q: queue.Queue = queue.Queue()
+
+    def synthesis_worker():
+        try:
+            for token in call_llm_stream(
+                prompt=full_prompt, system_prompt=_SYNTHESIS_SYSTEM_PROMPT,
+                model=model, project_id=project_id, timeout=180, max_tokens=2048,
+            ):
+                synthesis_q.put({"type": "token", "text": token})
+            synthesis_q.put({"type": "stream_done"})
+        except Exception as e:
+            synthesis_q.put({"type": "error", "message": str(e)})
+
+    thread2 = threading.Thread(target=synthesis_worker)
+    thread2.start()
+
+    full_answer = ""
+    while True:
+        msg = await loop.run_in_executor(None, synthesis_q.get)
+        if msg["type"] == "token":
+            full_answer += msg["text"]
+            yield {"event": "content", "data": {"text": msg["text"]}}
+        elif msg["type"] == "stream_done":
+            break
+        elif msg["type"] == "error":
+            logger.error("流式综合回答失败",
+                extra={"project_id": project_id, "error": msg["message"]})
+            yield {"event": "content", "data": {"text": f"\n\n综合回答失败：{msg['message']}"}}
+            break
+    thread2.join()
+
+    answer_links = extract_wikilinks(full_answer)
+    yield {"event": "done", "data": {
+        "sources": [str(p) for p in raw_files],
+        "references": answer_links,
+    }}
 
 
 def _summary_query(project_id: str, question: str, wiki_dir: Path,

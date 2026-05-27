@@ -1,6 +1,8 @@
 # backend/app/api/knowledge.py
 """知识 API 路由——LLM 查询、Wiki 页面 CRUD 和编辑历史。"""
+import json
 from fastapi import APIRouter, HTTPException, Depends, Query, Path
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from typing import Optional
 
@@ -38,6 +40,41 @@ async def query_knowledge(
         return svc.query_knowledge(body.project_id, user["id"], body.question, body.model)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
+
+
+# ── 流式查询 ──
+
+
+@router.get("/knowledge/query/stream")
+async def query_knowledge_stream(
+    project_id: str = Query(description="项目 ID"),
+    question: str = Query(min_length=1, max_length=2000, description="用户问题"),
+    model: Optional[str] = Query(default=None, description="LLM 模型（可选）"),
+    user: dict = Depends(get_current_user),
+):
+    """流式查询知识库——通过 SSE 推送进度和逐 token 回答。"""
+    async def event_generator():
+        try:
+            async for event in svc.query_knowledge_stream(
+                project_id, user["id"], question, model,
+            ):
+                event_type = event["event"]
+                data = json.dumps(event["data"], ensure_ascii=False)
+                yield f"event: {event_type}\ndata: {data}\n\n"
+        except PermissionError as e:
+            yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+        except Exception as e:
+            yield f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 # ── 页面目录树 ──
