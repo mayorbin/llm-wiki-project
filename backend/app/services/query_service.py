@@ -277,6 +277,100 @@ def _read_file_content(raw_path: Path) -> str:
     return content[:30000]
 
 
+def _run_extraction(question: str, file_paths: list[Path],
+                    project_id: str, model: Optional[str]) -> dict[str, str]:
+    """Round 1: 并行从每个候选文件中提取相关段落。
+
+    Args:
+        question: 用户问题
+        file_paths: 候选原始文件路径列表
+        project_id: 项目 ID
+        model: LLM 模型
+
+    Returns:
+        {file_name: extracted_text} 映射（只包含成功提取的文件）
+    """
+    from app.engines.llm_engine import call_llm
+
+    results: dict[str, str] = {}
+
+    def extract_one(fp: Path) -> tuple[str, str | None]:
+        try:
+            content = _read_file_content(fp)
+            if not content.strip():
+                return (fp.name, None)
+            prompt = _EXTRACTION_USER_PROMPT.format(
+                file_path=str(fp),
+                content=content,
+                question=question,
+            )
+            raw = call_llm(
+                prompt=prompt,
+                system_prompt=_EXTRACTION_SYSTEM_PROMPT,
+                model=model,
+                project_id=project_id,
+                timeout=120,
+                max_tokens=1024,
+            )
+            if not raw.strip() or "无相关内容" in raw:
+                return (fp.name, None)
+            return (fp.name, raw.strip())
+        except Exception as e:
+            logger.warning("文件段落提取失败",
+                extra={"file": str(fp), "error": str(e)})
+            return (fp.name, None)
+
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {executor.submit(extract_one, fp): fp for fp in file_paths}
+        for future in as_completed(futures):
+            name, text = future.result()
+            if text:
+                results[name] = text
+
+    return results
+
+
+def _synthesize_answer(question: str, excerpts: dict[str, str],
+                       matched_labels: list[str],
+                       project_id: str, model: Optional[str]) -> str:
+    """Round 2: 汇总提取结果，综合回答。
+
+    Args:
+        question: 用户问题
+        excerpts: {file_name: extracted_text}
+        matched_labels: 图谱中匹配到的节点标签（用于 wikilink 引用）
+        project_id: 项目 ID
+        model: LLM 模型
+
+    Returns:
+        LLM 综合回答
+    """
+    from app.engines.llm_engine import call_llm
+
+    parts = []
+    for fname, text in excerpts.items():
+        parts.append(f"### 来源: {fname}\n{text}")
+    combined = "\n\n---\n\n".join(parts)
+    page_refs = "\n".join(f"- [[{label}]]" for label in matched_labels) if matched_labels else "(无)"
+
+    full_prompt = _SYNTHESIS_USER_PROMPT.format(
+        combined_excerpts=combined,
+        page_refs=page_refs,
+        question=question,
+    )
+
+    answer = call_llm(
+        prompt=full_prompt,
+        system_prompt=_SYNTHESIS_SYSTEM_PROMPT,
+        model=model,
+        project_id=project_id,
+        timeout=180,
+        max_tokens=2048,
+    )
+
+    return answer or "综合回答失败：未能从相关文档中提取到信息。"
+
+
 def _project_wiki_dir(project_id: str) -> Path:
     """获取项目的 wiki/ 目录路径。"""
     settings = get_settings()
