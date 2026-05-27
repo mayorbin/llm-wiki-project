@@ -94,6 +94,8 @@
 
 获取匹配节点的 `community` 编号 → 从 `nodes` 中筛选所有 `community` 相同且 `type == "source"` 的节点 → 按 degree（关联边数量）降序排列 → 取前 8 个。
 
+**degree 计算**：`graph.json` 的节点不包含 `degree` 字段。实现时需从 `edges` 列表中统计每个节点作为 `source` 或 `target` 出现的次数，构建 `{node_id: degree}` 映射。
+
 孤立节点（community = -1）：仅用该节点自己的 `source_file`。
 
 选择策略依据：degree 越高的 source 节点在知识网络中连接越丰富，越可能包含与问题相关的信息。
@@ -196,11 +198,12 @@ query_knowledge(question)
        │    └─ graph_service.get_graph_data()
        │    └─ 节点匹配 + 社区拉取（按 degree 降序，≤8）
        │    └─ source_file 定位 raw 文件
-       │    └─ 非文本文件经 ConvertEngine 转文本
        │
        ├─ documents 为空 → 回退旧流程 + 提示
        │
        └─ _two_stage_retrieval(question, documents)
+            │
+            ├─ 非文本文件经 ConvertEngine 转文本
             │
             ├─ Round 1: ThreadPoolExecutor(max_workers=3) 并行
             │    └─ call_llm(extraction_prompt) per file
