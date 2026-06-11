@@ -213,7 +213,9 @@ async function executeDelete() {
     </div>
 
     <main class="main">
-      <router-view :key="route.fullPath" />
+      <keep-alive>
+        <router-view :key="route.params.projectId" />
+      </keep-alive>
     </main>
   </div>
 </template>

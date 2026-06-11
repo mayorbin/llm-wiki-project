@@ -135,6 +135,20 @@ class GraphEngine:
                  if p.name not in META_FILES]
         existing_stems = all_wiki_pages(self.wiki_dir)
 
+        # 构建 stem → node_id 映射（优先 entity/concept 页面）
+        stem_to_id: dict[str, str] = {}
+        for page_path in pages:
+            stem = page_path.stem.lower()
+            nid = _node_id(page_path, self.wiki_dir)
+            if stem not in stem_to_id:
+                stem_to_id[stem] = nid
+            else:
+                # 已有映射：entity/concept 优先于 source
+                existing_type = stem_to_id[stem].split("/")[0]
+                current_type = nid.split("/")[0] if "/" in nid else ""
+                if existing_type == "sources" and current_type in ("entities", "concepts"):
+                    stem_to_id[stem] = nid
+
         all_edges: list[dict] = []
         new_sha256: dict[str, str] = {}
         new_edges_cache: dict[str, list[dict]] = {}
@@ -158,10 +172,11 @@ class GraphEngine:
             # 缓存未命中：重新提取 wikilinks
             source_edges = []
             for target_name in extract_wikilinks(content):
-                if target_name.lower() in existing_stems:
+                target_stem = target_name.lower()
+                if target_stem in existing_stems:
                     source_edges.append({
                         "source": source_id,
-                        "target": target_name,
+                        "target": stem_to_id.get(target_stem, target_name),
                         "type": "EXTRACTED",
                         "source_file": rel_path,
                     })
@@ -342,15 +357,10 @@ class GraphEngine:
         all_edges = extracted_edges + inferred_edges
 
         # 清理孤立 entity / concept 页面（没有任何边连接的 → 孤儿节点）
-        # 构建 stem → node_id 映射，用于将 edge 的 wikilink 名称解析为节点 ID
-        stem_to_ids: dict[str, list[str]] = {}
-        for p in pages:
-            stem_to_ids.setdefault(p.stem.lower(), []).append(_node_id(p, self.wiki_dir))
         connected_ids: set[str] = set()
         for e in all_edges:
             connected_ids.add(e["source"])
-            for nid in stem_to_ids.get(e["target"].lower(), []):
-                connected_ids.add(nid)
+            connected_ids.add(e["target"])
         for section in ("entities", "concepts"):
             section_dir = self.wiki_dir / section
             if section_dir.exists():

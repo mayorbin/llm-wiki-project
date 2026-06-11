@@ -257,7 +257,7 @@ source_file: {fp}
 {chr(10).join(f'- **{d.get("label", "")}**: {d.get("value", "")}' for d in data.get('key_data', []))}
 
 ## 表格
-{chr(10).join(f'### {t.get("title", "表格")}\n' + chr(10).join('| ' + ' | '.join(r) + ' |' for r in t.get('rows', [])) for t in data.get('tables', []))}
+{chr(10).join(f'### {t.get("title", "表格")}{chr(10)}' + chr(10).join('| ' + ' | '.join(r) + ' |' for r in t.get('rows', [])) for t in data.get('tables', []))}
 
 ## 关键观点
 {chr(10).join('- ' + c for c in data.get('key_claims', []))}
